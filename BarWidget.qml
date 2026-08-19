@@ -46,6 +46,9 @@ Panel {
   readonly property string glyphArtist: String.fromCodePoint(0xF0803)
   readonly property string glyphAlbum: String.fromCodePoint(0xF0025)
   readonly property string glyphTrack: String.fromCodePoint(0xF0387)
+  // Same glyphs stappmus.activity-monitor uses for its expand/collapse button.
+  readonly property string glyphExpand: String.fromCodePoint(0xF065)
+  readonly property string glyphCollapse: String.fromCodePoint(0xF066)
 
   property var playback: ({ running: false, playing: false, paused: false, track: null, queue: 0 })
   property var account: ({ configured: false, server: "", userName: "" })
@@ -67,6 +70,9 @@ Panel {
   property bool loggingIn: false
   property bool cursorActive: false
   property int rowIndex: 0
+  // Search and the browse list, below the divider -- foldable so the panel
+  // can be a small now-playing card when all you want is a glance.
+  property bool detailsExpanded: true
 
   // Library search. The query lives here rather than being read off the field
   // so everything downstream -- the rows, the play command, the placeholder --
@@ -314,26 +320,31 @@ Panel {
 
   // The player controls, from the cursor's perspective, are a short vertical
   // stack sitting above the row list -- the seek bar (only with something to
-  // seek), then prev, play/pause, next -- even though on screen the buttons
-  // sit beside the seek bar rather than under it. -1 means the cursor is
-  // down in the row list instead; 0.._playerStopCount-1 indexes this stack.
+  // seek), then prev, play/pause, next, details toggle -- even though on
+  // screen the buttons sit beside the seek bar rather than under it. -1 means
+  // the cursor is down in the row list instead; 0.._playerStopCount-1 indexes
+  // this stack.
   property int playerIndex: -1
   readonly property int _playerSeekOffset: track !== null ? 1 : 0
-  readonly property int playerStopCount: _playerSeekOffset + 3
+  readonly property int playerStopCount: _playerSeekOffset + 4
 
   // The CLI verb a stop performs -- which doubles as its identity, since
-  // "seek" is the one stop that is not itself a command argument.
+  // "seek" and "details" are the stops that are not themselves command
+  // arguments.
   function playerStopKind(i) {
     if (_playerSeekOffset === 1 && i === 0) return "seek"
     var t = i - _playerSeekOffset
-    return t === 0 ? "prev" : (t === 1 ? "toggle" : "next")
+    if (t === 0) return "prev"
+    if (t === 1) return "toggle"
+    if (t === 2) return "next"
+    return "details"
   }
 
   // j/k out of the top of the list reaches the player stack, landing on
-  // whichever stop is nearest the list (next, or prev if there is no seek
-  // bar) -- the same "enter a group from its near edge" rule the display
-  // widget uses for its sections. j/k walk the stack from there; running off
-  // its top does nothing further, and off its bottom returns to the list.
+  // whichever stop is nearest the list -- the details toggle, the last one --
+  // the same "enter a group from its near edge" rule the display widget uses
+  // for its sections. j/k walk the stack from there; running off its top does
+  // nothing further, and off its bottom returns to the list.
   function moveCursor(step) {
     if (!cursorActive) { cursorActive = true; return }
     if (playerIndex >= 0) {
@@ -729,6 +740,7 @@ Panel {
       // Lands on the seek bar first, the way the display widget lands on its
       // brightness slider -- not several sections down in the library.
       playerIndex = track !== null ? 0 : -1
+      detailsExpanded = false
       refresh()
       refreshAccount()
     } else {
@@ -826,7 +838,8 @@ Panel {
         if (!root.cursorActive) return
         if (root.playerIndex >= 0) {
           var kind = root.playerStopKind(root.playerIndex)
-          root.send([kind === "seek" ? "toggle" : kind])
+          if (kind === "details") root.detailsExpanded = !root.detailsExpanded
+          else root.send([kind === "seek" ? "toggle" : kind])
         } else {
           root.activateRow(root.navRows[root.rowIndex])
         }
@@ -1072,12 +1085,13 @@ Panel {
               anchors.right: parent.right
               anchors.top: artFrame.height > infoColumn.height ? artFrame.bottom : infoColumn.bottom
               anchors.topMargin: Style.space(seekBlock.visible ? 6 : 8)
-              implicitHeight: transport.implicitHeight
+              implicitHeight: Math.max(transport.implicitHeight, detailsToggle.implicitHeight)
               height: implicitHeight
 
               Row {
                 id: transport
                 anchors.horizontalCenter: parent.horizontalCenter
+                anchors.verticalCenter: parent.verticalCenter
                 spacing: Style.space(6)
 
                 Repeater {
@@ -1106,12 +1120,37 @@ Panel {
                   }
                 }
               }
+
+              // Folds away everything below the divider -- search and the
+              // browse list -- so the panel can sit as a small now-playing
+              // card. Same button as prev/play/next, just off to the side
+              // rather than in the Row above so those stay centered on the
+              // card regardless -- and the last stop in the same player
+              // cursor stack, so h/l walks onto it exactly like the rest.
+              Button {
+                id: detailsToggle
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                iconText: root.detailsExpanded ? root.glyphCollapse : root.glyphExpand
+                foreground: root.dim
+                fontFamily: root.fontFamily
+                iconSize: Style.font.icon
+                hasCursor: root.cursorActive
+                  && root.playerIndex === root._playerSeekOffset + 3
+                onClicked: root.detailsExpanded = !root.detailsExpanded
+                onHovered: function(h) {
+                  if (h) {
+                    root.cursorActive = true
+                    root.playerIndex = root._playerSeekOffset + 3
+                  }
+                }
+              }
             }
           }
 
           Rectangle {
             width: parent.width
-            visible: root.loggedIn
+            visible: root.loggedIn && root.detailsExpanded
             height: Style.spacing.hairline
             color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.18)
           }
@@ -1121,7 +1160,7 @@ Panel {
           // when you already know what you are in the mood for.
           Item {
             width: parent.width
-            visible: root.loggedIn
+            visible: root.loggedIn && root.detailsExpanded
             implicitHeight: searchField.implicitHeight
 
             TextField {
@@ -1210,7 +1249,7 @@ Panel {
           // Quick picks, plus whichever section is folded open.
           Column {
             width: parent.width
-            visible: root.loggedIn
+            visible: root.loggedIn && root.detailsExpanded
             spacing: Style.space(1)
 
             Repeater {
@@ -1323,7 +1362,7 @@ Panel {
           // Errors from the CLI, which already phrases them for a human.
           Text {
             width: parent.width
-            visible: root.notice !== ""
+            visible: root.notice !== "" && root.detailsExpanded
             text: root.notice
             color: bar ? bar.urgent : Color.urgent
             font.family: root.fontFamily
