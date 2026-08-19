@@ -4,7 +4,7 @@ Play music from your [Jellyfin](https://jellyfin.org/) server straight from the
 Omarchy bar.
 
 The plugin puts the current track in your bar, with a popup holding cover art,
-a seek bar, transport and volume, a search across your whole library, and quick
+a seek bar with transport controls, a search across your whole library, and quick
 picks for your playlists, favourites, a shuffle, and the queue. Audio is streamed to
 a local `mpv`, which means the track also shows up on MPRIS — so your media keys
 and Omarchy's own media widget control it without any extra setup.
@@ -106,10 +106,6 @@ In the bar:
 | Left click | open the popup |
 | Right click | play / pause |
 | Middle click | next track |
-| Scroll | volume up / down |
-
-Scroll adjusts volume rather than skipping tracks, because it is the thing you
-reach for mid-song and it works without opening the popup.
 
 The bar entry is just the icon — Omarchy's own media widget already shows the
 track title over MPRIS, so this one stays out of its way rather than saying
@@ -119,10 +115,10 @@ the same thing twice.
      alt="The Omarchy bar, with the music icon sitting among the other bar widgets.">
 
 The popup carries, top to bottom: cover art with title, artist and album; a
-draggable seek bar with elapsed and total time; transport and volume on one row;
-a search box; then your playlists, favourites, artists, albums, a shuffle, and
-the current queue. Both bars are draggable — the seek bar really does seek,
-which is why it is a slider and not the plain progress line it started as.
+draggable seek bar with elapsed and total time, transport buttons sitting
+beside it; a search box; then your playlists, favourites, artists, albums, a
+shuffle, and the current queue. The seek bar really does seek, which is why
+it is a slider and not the plain progress line it started as.
 
 Opening **Queue** lists what is loaded, with the current track marked; click any
 row to jump to it.
@@ -186,8 +182,17 @@ a name and pressing `Enter` twice still queues the lot — with a look at what
 that is in between.
 
 In the popup, `j`/`k` move, `l`/`→` opens a row, `h`/`←` goes back, `Enter`
-plays or opens, `space` toggles playback, `n` and `p` skip, `+`/`-` change volume, `s`
+plays or opens, `space` toggles playback, `n` and `p` skip, `s`
 shuffles the library, and `/` searches.
+
+`j`/`k` out of the top of the list also reach the transport controls —
+prev, play/pause, next, and the seek bar above them — the same way `j`/`k`
+reach the display widget's sliders and presets. `Enter` plays, pauses,
+skips, or seeks depending which one has the cursor; `h`/`l` step between
+prev/play/next while the cursor is on one of them, or scrub 5 seconds while
+it is on the seek bar, the same split the display widget makes between its
+scale presets and its brightness slider. With something playing, that is
+where the cursor starts.
 
 There is no settings screen: album art is always shown, the bar stays
 icon-only, and everything else is a sensible default. The one knob left — how
@@ -198,7 +203,8 @@ or log out — that is a CLI call (`login` again, or `logout`).
 
 ## Volume
 
-The popup has its own volume slider, and it is worth knowing what it controls:
+There is no volume control in the popup — use your system volume, or the CLI's
+`volume` command (see below). What it controls is worth knowing either way:
 mpv's software volume, on top of your system volume. mpv's own default is 100,
 which is the source at full scale and lands painfully loud next to a browser,
 so a fresh install starts at 70. The level is remembered between tracks,
