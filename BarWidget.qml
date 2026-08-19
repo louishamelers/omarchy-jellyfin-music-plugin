@@ -315,47 +315,83 @@ Panel {
 
   function clampCursor() {
     if (rowIndex >= navRows.length) rowIndex = Math.max(0, navRows.length - 1)
-    if (rowIndex < 0) rowIndex = 0
+    // -1 is a deliberate rest state -- the cursor sitting on the search
+    // field rather than any row -- not an out-of-bounds index to snap
+    // back into the list. Leaving it alone is what stops a status poll's
+    // onNavRowsChanged from silently bumping the cursor off the field
+    // while someone is sitting on it.
+    if (rowIndex < -1) rowIndex = 0
   }
 
   // The player controls, from the cursor's perspective, are a short vertical
-  // stack sitting above the row list -- the seek bar (only with something to
-  // seek), then prev, play/pause, next, details toggle -- even though on
-  // screen the buttons sit beside the seek bar rather than under it. -1 means
-  // the cursor is down in the row list instead; 0.._playerStopCount-1 indexes
-  // this stack.
+  // stack of just two stops -- the seek bar (only with something to seek),
+  // then the transport row -- even though prev/play/next/expand are four
+  // separate buttons on screen. j/k only ever walk this vertical stack; -1
+  // means the cursor is down in the row list instead, 0.._playerStopCount-1
+  // indexes the stack.
   property int playerIndex: -1
   readonly property int _playerSeekOffset: track !== null ? 1 : 0
-  readonly property int playerStopCount: _playerSeekOffset + 4
+  readonly property int playerStopCount: _playerSeekOffset + 1
 
-  // The CLI verb a stop performs -- which doubles as its identity, since
-  // "seek" and "details" are the stops that are not themselves command
-  // arguments.
+  // Horizontal position within the transport stop: prev, play/pause, next,
+  // expand, left to right as they sit on screen. h/l walk this instead of
+  // j/k once the cursor is parked on the transport stop -- reached from
+  // play/pause outward, not as separate stops of their own on the vertical
+  // axis.
+  property int transportIndex: 1
+
+  // Whether rowIndex (a row, or -1 for the search field) is the thing the
+  // highlight should be following right now. Rows and the search field
+  // both used to key their hasCursor off rowIndex alone, so stepping off
+  // the top of the list into the player stack left rowIndex's old value
+  // sitting there unchanged -- the search field (or a row) stayed lit at
+  // the same time as whichever player stop the cursor actually moved to.
+  // Every row/search hasCursor binding should use this, not root.cursorActive
+  // directly, so only one thing is ever highlighted at a time.
+  readonly property bool rowCursorVisible: cursorActive && playerIndex < 0
+
+  // Which vertical stop index i is -- the only two things j/k ever land
+  // on in the stack.
   function playerStopKind(i) {
-    if (_playerSeekOffset === 1 && i === 0) return "seek"
-    var t = i - _playerSeekOffset
-    if (t === 0) return "prev"
-    if (t === 1) return "toggle"
-    if (t === 2) return "next"
-    return "details"
+    return (_playerSeekOffset === 1 && i === 0) ? "seek" : "transport"
   }
 
-  // j/k out of the top of the list reaches the player stack, landing on
-  // whichever stop is nearest the list -- the details toggle, the last one --
-  // the same "enter a group from its near edge" rule the display widget uses
-  // for its sections. j/k walk the stack from there; running off its top does
-  // nothing further, and off its bottom returns to the list.
+  // The CLI verb a transport position performs -- which doubles as its
+  // identity, since "details" is not itself a command argument.
+  function transportKind() {
+    return ["prev", "toggle", "next", "details"][transportIndex]
+  }
+
+  // j/k out of the top of the list reaches the search field, then the
+  // player stack, landing on whichever stop is nearest -- the same "enter
+  // a group from its near edge" rule the display widget uses for its
+  // sections. j/k walk the stack from there; running off its top does
+  // nothing further, and off its bottom returns to the search field, then
+  // the list. Landing on the search field is a stop, not an edit: it picks
+  // up the shared cursor highlight (searchField.hasCursor, bound below)
+  // without taking keyboard focus, so j/k keep walking straight over it
+  // the way they walk over any other row. Enter is what actually steps
+  // into it -- see keyCatcher's onActivateRequested.
   function moveCursor(step) {
     if (!cursorActive) { cursorActive = true; return }
     if (playerIndex >= 0) {
       var next = playerIndex + step
       if (next < 0) return
-      if (next >= playerStopCount) { playerIndex = -1; rowIndex = 0; clampCursor(); return }
+      if (next >= playerStopCount) { playerIndex = -1; rowIndex = -1; return }
       playerIndex = next
+      // Landing on the transport stop always re-centers on play/pause --
+      // prev/next/expand are reached with h/l from there, not by walking
+      // further with j/k.
+      if (playerStopKind(playerIndex) === "transport") transportIndex = 1
+      return
+    }
+    if (rowIndex < 0) {
+      if (step > 0) rowIndex = 0
+      else if (path.length === 0) { playerIndex = playerStopCount - 1; transportIndex = 1 }
       return
     }
     if (step < 0 && rowIndex === 0 && path.length === 0) {
-      playerIndex = playerStopCount - 1
+      rowIndex = -1
       return
     }
     rowIndex += step
@@ -376,16 +412,15 @@ Panel {
   }
 
   // h/l on the seek stop scrubs, same as h/l on the display widget's
-  // brightness slider; on a transport stop they walk prev/play/next instead,
-  // the same as h/l on that widget's scale-preset row -- and stay inside the
-  // transport rather than spilling into the seek bar or the list, so the two
-  // meanings of the key never fight over one press.
+  // brightness slider; on the transport stop they walk prev/play/next/expand
+  // instead, the same as h/l on that widget's scale-preset row -- and stay
+  // inside the transport rather than spilling into the seek bar or the
+  // list, so the two meanings of the key never fight over one press.
   function movePlayerCursorH(step) {
-    var kind = playerStopKind(playerIndex)
-    if (kind === "seek") { seekBy(step * seekStepSeconds); return }
-    var next = playerIndex + step
-    if (next < _playerSeekOffset || next >= playerStopCount) return
-    playerIndex = next
+    if (playerStopKind(playerIndex) === "seek") { seekBy(step * seekStepSeconds); return }
+    var next = transportIndex + step
+    if (next < 0 || next > 3) return
+    transportIndex = next
   }
 
   // What a track queues -- and it is never the one track on its own, but the
@@ -740,6 +775,7 @@ Panel {
       // Lands on the seek bar first, the way the display widget lands on its
       // brightness slider -- not several sections down in the library.
       playerIndex = track !== null ? 0 : -1
+      transportIndex = 1
       detailsExpanded = false
       refresh()
       refreshAccount()
@@ -837,9 +873,17 @@ Panel {
       onActivateRequested: {
         if (!root.cursorActive) return
         if (root.playerIndex >= 0) {
-          var kind = root.playerStopKind(root.playerIndex)
-          if (kind === "details") root.detailsExpanded = !root.detailsExpanded
-          else root.send([kind === "seek" ? "toggle" : kind])
+          if (root.playerStopKind(root.playerIndex) === "seek") {
+            root.send(["toggle"])
+          } else {
+            var tKind = root.transportKind()
+            if (tKind === "details") root.detailsExpanded = !root.detailsExpanded
+            else root.send([tKind])
+          }
+        } else if (root.rowIndex < 0) {
+          // Enter is what actually steps onto the search field's own stop
+          // rather than just walking over it -- j/k alone never focus it.
+          searchField.forceActiveFocus()
         } else {
           root.activateRow(root.navRows[root.rowIndex])
         }
@@ -852,523 +896,544 @@ Panel {
         else if (t === "n") root.send(["next"])
         else if (t === "p") root.send(["prev"])
         else if (t === "s") root.send(["play", "--shuffle", "--limit", String(root.setting("shuffleLimit", 200))])
-        // "/" for search, the way a pager or a browser does it.
-        else if (t === "/") searchField.forceActiveFocus()
+        // "/" for search, the way a pager or a browser does it. Also
+        // claims the row cursor from wherever it was (a player stop
+        // included) so the field visibly lights up once focus lands.
+        else if (t === "/") {
+          root.cursorActive = true
+          root.playerIndex = -1
+          searchField.forceActiveFocus()
+        }
       }
 
-      Flickable {
-        id: panelFlick
-        anchors.fill: parent
-        contentWidth: width
-        contentHeight: column.implicitHeight
-        clip: true
-        boundsBehavior: Flickable.StopAtBounds
-        flickableDirection: Flickable.VerticalFlick
-        interactive: contentHeight > height
-        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+      // No Flickable here: the popup's own contentHeight is already capped
+      // against screen space (panel.fittedContentHeight above), the way
+      // network/Panel.qml's top-level Column is. The only scrolling region
+      // is the browse-rows ListView below, so a long artist list scrolls in
+      // place instead of dragging the search box and now-playing card off
+      // screen with it.
+      Column {
+        id: column
+        width: keyCatcher.width
+        spacing: Style.space(8)
 
+        // Connect. There is nothing else the panel can usefully do before
+        // an account exists, so this is the whole of it -- no server
+        // switching or log-out from here once signed in.
         Column {
-          id: column
-          width: panelFlick.width
+          width: parent.width
+          visible: !root.loggedIn
           spacing: Style.space(8)
 
-          // Connect. There is nothing else the panel can usefully do before
-          // an account exists, so this is the whole of it -- no server
-          // switching or log-out from here once signed in.
-          Column {
+          Text {
             width: parent.width
-            visible: !root.loggedIn
-            spacing: Style.space(8)
-
-            Text {
-              width: parent.width
-              text: "Connect to Jellyfin"
-              color: root.foreground
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.subtitle
-            }
-
-            TextField {
-              id: serverField
-              width: parent.width
-              foreground: root.foreground
-              placeholderText: "192.168.1.50:8096 or jellyfin.example.com"
-              onAccepted: userField.forceActiveFocus()
-            }
-
-            TextField {
-              id: userField
-              width: parent.width
-              foreground: root.foreground
-              placeholderText: "Username"
-              onAccepted: passwordField.forceActiveFocus()
-            }
-
-            TextField {
-              id: passwordField
-              width: parent.width
-              foreground: root.foreground
-              password: true
-              placeholderText: "Password"
-              onAccepted: root.logIn()
-            }
-
-            Button {
-              text: root.loggingIn ? "Connecting…" : "Log in"
-              enabled: !root.loggingIn
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              bordered: true
-              onClicked: root.logIn()
-            }
+            text: "Connect to Jellyfin"
+            color: root.foreground
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.subtitle
           }
 
-          // Now playing: art on the left, title/artist/album/scrubber to its
-          // right, transport below both -- spanning the full width, flush
-          // with the art's left edge, rather than starting where the text
-          // column does.
-          Item {
+          TextField {
+            id: serverField
             width: parent.width
-            visible: root.loggedIn
-            implicitHeight: Math.max(artFrame.height, infoColumn.height)
-              + Style.space(seekBlock.visible ? 6 : 8) + transportBlock.implicitHeight
-
-            Rectangle {
-              id: artFrame
-              anchors.left: parent.left
-              anchors.top: parent.top
-              visible: root.showArt && root.track !== null
-              width: visible ? Style.space(80) : 0
-              height: visible ? Style.space(80) : 0
-              radius: Style.space(6)
-              color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.08)
-              clip: true
-
-              Image {
-                id: artImage
-                anchors.fill: parent
-                source: root.showArt && root.playback.art ? root.playback.art : ""
-                sourceSize.width: 160
-                sourceSize.height: 160
-                fillMode: Image.PreserveAspectCrop
-                asynchronous: true
-                cache: true
-                visible: status === Image.Ready
-              }
-
-              // A library without cover art should not leave a hole.
-              Text {
-                anchors.centerIn: parent
-                visible: !artImage.visible
-                text: root.glyphMusic
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.display
-              }
-            }
-
-            Item {
-              id: infoColumn
-              anchors.left: artFrame.visible ? artFrame.right : parent.left
-              anchors.leftMargin: artFrame.visible ? Style.space(12) : 0
-              anchors.right: parent.right
-              anchors.top: parent.top
-              implicitHeight: textStack.implicitHeight
-                + (seekBlock.visible ? Style.space(8) + seekBlock.implicitHeight : 0)
-              height: implicitHeight
-
-              Column {
-                id: textStack
-                width: parent.width
-                spacing: Style.space(2)
-
-                Text {
-                  width: parent.width
-                  text: root.track ? root.track.title : (root.loggedIn ? "Nothing playing" : "Connect a server to start")
-                  color: root.foreground
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.subtitle
-                  elide: Text.ElideRight
-                }
-
-                Text {
-                  width: parent.width
-                  visible: root.track && root.track.artist !== ""
-                  text: root.track ? root.track.artist : ""
-                  color: root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.bodySmall
-                  elide: Text.ElideRight
-                }
-
-                Text {
-                  width: parent.width
-                  visible: root.track && root.track.album !== ""
-                  text: root.track ? root.track.album : ""
-                  color: root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                  elide: Text.ElideRight
-                }
-              }
-
-              // Wrapped in the same cursor chrome the display widget's
-              // brightness slider uses, so j/k reaching this row and h/l
-              // seeking it look like the rest of the kit rather than a mouse
-              // afterthought. Keyboard and mouse focus share this one
-              // highlight, per CursorSurface's contract.
-              Item {
-                id: seekBlock
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.top: textStack.bottom
-                anchors.topMargin: Style.space(8)
-                visible: root.track !== null
-                implicitHeight: seekSurface.height
-                height: implicitHeight
-
-                CursorSurface {
-                  id: seekSurface
-                  anchors.left: parent.left
-                  anchors.right: elapsedLabel.left
-                  anchors.rightMargin: Style.space(8)
-                  anchors.top: parent.top
-                  height: seekSlider.implicitHeight + Style.spacing.controlGap
-                  hasCursor: root.cursorActive && root.playerIndex === 0
-                  foreground: root.foreground
-                  outline: true
-
-                  PanelSlider {
-                    id: seekSlider
-                    bar: root.bar
-                    anchors.fill: parent
-                    anchors.leftMargin: Style.space(6)
-                    anchors.rightMargin: Style.space(6)
-                    minimum: 0
-                    maximum: Math.max(1, root.playback.duration || 1)
-                    step: 1
-                    integer: true
-                    value: root.playback.elapsed || 0
-                    onReleased: function(position) { root.send(["seek", String(Math.round(position))]) }
-                  }
-
-                  HoverHandler {
-                    onHoveredChanged: if (hovered) {
-                      root.cursorActive = true
-                      root.playerIndex = 0
-                    }
-                  }
-                }
-
-                // Elapsed only, beside the scrubber -- how far into the
-                // track you are is what matters glancing at a bar; the
-                // duration is right there as how far the bar has left to go.
-                Text {
-                  id: elapsedLabel
-                  anchors.right: parent.right
-                  anchors.verticalCenter: seekSurface.verticalCenter
-                  text: root.playback.elapsedText || "0:00"
-                  color: root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                }
-              }
-            }
-
-            // Transport, its own row spanning the full width below both the
-            // art and the text column, centered in it -- prev, play/pause,
-            // next, all borderless and one size, play/pause simply brighter
-            // as the primary action.
-            Item {
-              id: transportBlock
-              anchors.left: parent.left
-              anchors.right: parent.right
-              anchors.top: artFrame.height > infoColumn.height ? artFrame.bottom : infoColumn.bottom
-              anchors.topMargin: Style.space(seekBlock.visible ? 6 : 8)
-              implicitHeight: Math.max(transport.implicitHeight, detailsToggle.implicitHeight)
-              height: implicitHeight
-
-              Row {
-                id: transport
-                anchors.horizontalCenter: parent.horizontalCenter
-                anchors.verticalCenter: parent.verticalCenter
-                spacing: Style.space(6)
-
-                Repeater {
-                  model: [
-                    { glyph: root.glyphPrev, action: "prev", primary: false },
-                    { glyph: root.playing ? root.glyphPause : root.glyphPlay, action: "toggle", primary: true },
-                    { glyph: root.glyphNext, action: "next", primary: false }
-                  ]
-
-                  Button {
-                    required property var modelData
-                    required property int index
-                    iconText: modelData.glyph
-                    foreground: modelData.primary ? root.foreground : root.dim
-                    fontFamily: root.fontFamily
-                    iconSize: Style.font.icon
-                    hasCursor: root.cursorActive
-                      && root.playerIndex === root._playerSeekOffset + index
-                    onClicked: root.send([modelData.action])
-                    onHovered: function(h) {
-                      if (h) {
-                        root.cursorActive = true
-                        root.playerIndex = root._playerSeekOffset + index
-                      }
-                    }
-                  }
-                }
-              }
-
-              // Folds away everything below the divider -- search and the
-              // browse list -- so the panel can sit as a small now-playing
-              // card. Same button as prev/play/next, just off to the side
-              // rather than in the Row above so those stay centered on the
-              // card regardless -- and the last stop in the same player
-              // cursor stack, so h/l walks onto it exactly like the rest.
-              Button {
-                id: detailsToggle
-                anchors.right: parent.right
-                anchors.verticalCenter: parent.verticalCenter
-                iconText: root.detailsExpanded ? root.glyphCollapse : root.glyphExpand
-                foreground: root.dim
-                fontFamily: root.fontFamily
-                iconSize: Style.font.icon
-                hasCursor: root.cursorActive
-                  && root.playerIndex === root._playerSeekOffset + 3
-                onClicked: root.detailsExpanded = !root.detailsExpanded
-                onHovered: function(h) {
-                  if (h) {
-                    root.cursorActive = true
-                    root.playerIndex = root._playerSeekOffset + 3
-                  }
-                }
-              }
-            }
+            foreground: root.foreground
+            placeholderText: "192.168.1.50:8096 or jellyfin.example.com"
+            onAccepted: userField.forceActiveFocus()
           }
+
+          TextField {
+            id: userField
+            width: parent.width
+            foreground: root.foreground
+            placeholderText: "Username"
+            onAccepted: passwordField.forceActiveFocus()
+          }
+
+          TextField {
+            id: passwordField
+            width: parent.width
+            foreground: root.foreground
+            password: true
+            placeholderText: "Password"
+            onAccepted: root.logIn()
+          }
+
+          Button {
+            text: root.loggingIn ? "Connecting…" : "Log in"
+            enabled: !root.loggingIn
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            bordered: true
+            onClicked: root.logIn()
+          }
+        }
+
+        // Now playing: art on the left, title/artist/album/scrubber to its
+        // right, transport below both -- spanning the full width, flush
+        // with the art's left edge, rather than starting where the text
+        // column does.
+        Item {
+          width: parent.width
+          visible: root.loggedIn
+          implicitHeight: Math.max(artFrame.height, infoColumn.height)
+            + Style.space(seekBlock.visible ? 6 : 8) + transportBlock.implicitHeight
 
           Rectangle {
-            width: parent.width
-            visible: root.loggedIn && root.detailsExpanded
-            height: Style.spacing.hairline
-            color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.18)
+            id: artFrame
+            anchors.left: parent.left
+            anchors.top: parent.top
+            visible: root.showArt && root.track !== null
+            width: visible ? Style.space(80) : 0
+            height: visible ? Style.space(80) : 0
+            radius: Style.space(6)
+            color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.08)
+            clip: true
+
+            Image {
+              id: artImage
+              anchors.fill: parent
+              source: root.showArt && root.playback.art ? root.playback.art : ""
+              sourceSize.width: 160
+              sourceSize.height: 160
+              fillMode: Image.PreserveAspectCrop
+              asynchronous: true
+              cache: true
+              visible: status === Image.Ready
+            }
+
+            // A library without cover art should not leave a hole.
+            Text {
+              anchors.centerIn: parent
+              visible: !artImage.visible
+              text: root.glyphMusic
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.display
+            }
           }
 
-          // Search. Above the quick picks because it is the way into a library
-          // too large to ever be listed; the picks below are the shortcuts for
-          // when you already know what you are in the mood for.
           Item {
-            width: parent.width
-            visible: root.loggedIn && root.detailsExpanded
-            implicitHeight: searchField.implicitHeight
+            id: infoColumn
+            anchors.left: artFrame.visible ? artFrame.right : parent.left
+            anchors.leftMargin: artFrame.visible ? Style.space(12) : 0
+            anchors.right: parent.right
+            anchors.top: parent.top
+            implicitHeight: textStack.implicitHeight
+              + (seekBlock.visible ? Style.space(8) + seekBlock.implicitHeight : 0)
+            height: implicitHeight
 
-            TextField {
-              id: searchField
-              anchors.left: parent.left
-              anchors.right: clearSearchButton.left
-              anchors.rightMargin: Style.space(6)
-              foreground: root.foreground
-              // One box, two jobs, decided by where you are standing: at the
-              // picks there is a library to search, and inside a level there
-              // is a list in front of you to narrow.
-              placeholderText: root.level
-                ? "Filter " + root.level.label
-                : "Search artists, albums and tracks"
+            Column {
+              id: textStack
+              width: parent.width
+              spacing: Style.space(2)
 
-              onTextChanged: {
-                root.queryText = text
-                // The cursor belongs on the top hit of the new query, not on
-                // whatever row it happened to be resting on. Inside a level
-                // row zero is the way back, so the first match is row one.
-                root.rowIndex = root.path.length > 0 ? 1 : 0
-                // Filtering needs no process and no waiting; searching does.
-                if (root.path.length === 0) searchDebounce.restart()
+              Text {
+                width: parent.width
+                text: root.track ? root.track.title : (root.loggedIn ? "Nothing playing" : "Connect a server to start")
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.subtitle
+                elide: Text.ElideRight
               }
 
-              Keys.onPressed: function(event) {
-                if (event.key === Qt.Key_Escape) {
-                  // A ladder out: the query first, then the level, then the
-                  // field, then the panel -- so Escape never throws away more
-                  // than you meant.
-                  if (searchField.text !== "") root.clearSearch()
-                  else if (root.path.length > 0) root.popLevel()
-                  else keyCatcher.forceActiveFocus()
-                  event.accepted = true
-                } else if (event.key === Qt.Key_Down) {
-                  root.moveCursor(1)
-                  event.accepted = true
-                } else if (event.key === Qt.Key_Up) {
-                  root.moveCursor(-1)
-                  event.accepted = true
-                } else if (event.key === Qt.Key_Right
-                           && searchField.cursorPosition === searchField.text.length) {
-                  // Only once the caret has nowhere left to go, where the key
-                  // would otherwise do nothing: that is what makes it free to
-                  // mean "open this" without ever costing you an edit. It is
-                  // the whole point of typing a band name -- right to see the
-                  // albums, Enter to just play them.
-                  root.openRow(root.navRows[root.rowIndex])
-                  event.accepted = true
-                } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-                  // Enter plays the top hit, so the common case is type and
-                  // go without ever leaving the field.
-                  root.activateRow(root.navRows[root.rowIndex])
-                  event.accepted = true
+              Text {
+                width: parent.width
+                visible: root.track && root.track.artist !== ""
+                text: root.track ? root.track.artist : ""
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                elide: Text.ElideRight
+              }
+
+              Text {
+                width: parent.width
+                visible: root.track && root.track.album !== ""
+                text: root.track ? root.track.album : ""
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                elide: Text.ElideRight
+              }
+            }
+
+            // Wrapped in the same cursor chrome the display widget's
+            // brightness slider uses, so j/k reaching this row and h/l
+            // seeking it look like the rest of the kit rather than a mouse
+            // afterthought. Keyboard and mouse focus share this one
+            // highlight, per CursorSurface's contract.
+            Item {
+              id: seekBlock
+              anchors.left: parent.left
+              anchors.right: parent.right
+              anchors.top: textStack.bottom
+              anchors.topMargin: Style.space(8)
+              visible: root.track !== null
+              implicitHeight: seekSurface.height
+              height: implicitHeight
+
+              CursorSurface {
+                id: seekSurface
+                anchors.left: parent.left
+                anchors.right: elapsedLabel.left
+                anchors.rightMargin: Style.space(8)
+                anchors.top: parent.top
+                height: seekSlider.implicitHeight + Style.spacing.controlGap
+                hasCursor: root.cursorActive && root.playerIndex === 0
+                foreground: root.foreground
+                outline: true
+
+                PanelSlider {
+                  id: seekSlider
+                  bar: root.bar
+                  anchors.fill: parent
+                  anchors.leftMargin: Style.space(6)
+                  anchors.rightMargin: Style.space(6)
+                  minimum: 0
+                  maximum: Math.max(1, root.playback.duration || 1)
+                  step: 1
+                  integer: true
+                  value: root.playback.elapsed || 0
+                  onReleased: function(position) { root.send(["seek", String(Math.round(position))]) }
+                }
+
+                HoverHandler {
+                  onHoveredChanged: if (hovered) {
+                    root.cursorActive = true
+                    root.playerIndex = 0
+                  }
+                }
+              }
+
+              // Elapsed only, beside the scrubber -- how far into the
+              // track you are is what matters glancing at a bar; the
+              // duration is right there as how far the bar has left to go.
+              Text {
+                id: elapsedLabel
+                anchors.right: parent.right
+                anchors.verticalCenter: seekSurface.verticalCenter
+                text: root.playback.elapsedText || "0:00"
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+            }
+          }
+
+          // Transport, its own row spanning the full width below both the
+          // art and the text column, centered in it -- prev, play/pause,
+          // next, all borderless and one size, play/pause simply brighter
+          // as the primary action.
+          Item {
+            id: transportBlock
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: artFrame.height > infoColumn.height ? artFrame.bottom : infoColumn.bottom
+            anchors.topMargin: Style.space(seekBlock.visible ? 6 : 8)
+            implicitHeight: Math.max(transport.implicitHeight, detailsToggle.implicitHeight)
+            height: implicitHeight
+
+            Row {
+              id: transport
+              anchors.horizontalCenter: parent.horizontalCenter
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: Style.space(6)
+
+              Repeater {
+                model: [
+                  { glyph: root.glyphPrev, action: "prev", primary: false },
+                  { glyph: root.playing ? root.glyphPause : root.glyphPlay, action: "toggle", primary: true },
+                  { glyph: root.glyphNext, action: "next", primary: false }
+                ]
+
+                Button {
+                  required property var modelData
+                  required property int index
+                  iconText: modelData.glyph
+                  foreground: modelData.primary ? root.foreground : root.dim
+                  fontFamily: root.fontFamily
+                  iconSize: Style.font.icon
+                  // The Repeater's own index already matches
+                  // transportIndex's prev/toggle/next ordering.
+                  hasCursor: root.cursorActive
+                    && root.playerIndex === root._playerSeekOffset
+                    && root.transportIndex === index
+                  onClicked: root.send([modelData.action])
+                  onHovered: function(h) {
+                    if (h) {
+                      root.cursorActive = true
+                      root.playerIndex = root._playerSeekOffset
+                      root.transportIndex = index
+                    }
+                  }
                 }
               }
             }
 
-            Text {
-              id: clearSearchButton
+            // Folds away everything below the divider -- search and the
+            // browse list -- so the panel can sit as a small now-playing
+            // card. Same button as prev/play/next, just off to the side
+            // rather than in the Row above so those stay centered on the
+            // card regardless -- and the far end of the same transport
+            // stop, so h/l walks onto it exactly like prev/toggle/next.
+            Button {
+              id: detailsToggle
               anchors.right: parent.right
-              anchors.verticalCenter: searchField.verticalCenter
-              // Kept in the layout with nothing to clear, so the field does
-              // not resize out from under the first letter typed.
-              opacity: root.searchMode ? 1 : 0
-              text: "✕"
-              color: clearSearchArea.containsMouse ? root.foreground : root.dim
+              anchors.verticalCenter: parent.verticalCenter
+              iconText: root.detailsExpanded ? root.glyphCollapse : root.glyphExpand
+              foreground: root.dim
+              fontFamily: root.fontFamily
+              iconSize: Style.font.icon
+              hasCursor: root.cursorActive
+                && root.playerIndex === root._playerSeekOffset
+                && root.transportIndex === 3
+              onClicked: root.detailsExpanded = !root.detailsExpanded
+              onHovered: function(h) {
+                if (h) {
+                  root.cursorActive = true
+                  root.playerIndex = root._playerSeekOffset
+                  root.transportIndex = 3
+                }
+              }
+            }
+          }
+        }
+
+        Rectangle {
+          width: parent.width
+          visible: root.loggedIn && root.detailsExpanded
+          height: Style.spacing.hairline
+          color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.18)
+        }
+
+        // Search. Above the quick picks because it is the way into a library
+        // too large to ever be listed; the picks below are the shortcuts for
+        // when you already know what you are in the mood for.
+        Item {
+          width: parent.width
+          visible: root.loggedIn && root.detailsExpanded
+          implicitHeight: searchField.implicitHeight
+
+          TextField {
+            id: searchField
+            anchors.left: parent.left
+            anchors.right: parent.right
+            foreground: root.foreground
+            // The panel-cursor resting here (root.rowIndex === -1) paints
+            // the same hover-cursor chrome a hovered/keyboard-selected row
+            // gets, without taking keyboard focus -- j/k can keep walking
+            // straight over the field. Enter is what actually steps in.
+            hasCursor: root.rowCursorVisible && root.rowIndex < 0
+            // One box, two jobs, decided by where you are standing: at the
+            // picks there is a library to search, and inside a level there
+            // is a list in front of you to narrow.
+            placeholderText: root.level
+              ? "Filter " + root.level.label
+              : "Search artists, albums and tracks"
+
+            onTextChanged: {
+              root.queryText = text
+              // The cursor belongs on the top hit of the new query, not on
+              // whatever row it happened to be resting on. Inside a level
+              // row zero is the way back, so the first match is row one.
+              root.rowIndex = root.path.length > 0 ? 1 : 0
+              // Filtering needs no process and no waiting; searching does.
+              if (root.path.length === 0) searchDebounce.restart()
+            }
+
+            Keys.onPressed: function(event) {
+              if (event.key === Qt.Key_Escape) {
+                // A ladder out: the query first, then the level, then the
+                // field, then the panel -- so Escape never throws away more
+                // than you meant.
+                if (searchField.text !== "") root.clearSearch()
+                else if (root.path.length > 0) root.popLevel()
+                else keyCatcher.forceActiveFocus()
+                event.accepted = true
+              } else if (event.key === Qt.Key_Down) {
+                root.moveCursor(1)
+                event.accepted = true
+              } else if (event.key === Qt.Key_Up) {
+                root.moveCursor(-1)
+                event.accepted = true
+              } else if (event.key === Qt.Key_Right
+                         && searchField.cursorPosition === searchField.text.length) {
+                // Only once the caret has nowhere left to go, where the key
+                // would otherwise do nothing: that is what makes it free to
+                // mean "open this" without ever costing you an edit. It is
+                // the whole point of typing a band name -- right to see the
+                // albums, Enter to just play them.
+                root.openRow(root.navRows[root.rowIndex])
+                event.accepted = true
+              } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                // Enter plays the top hit, so the common case is type and
+                // go without ever leaving the field.
+                root.activateRow(root.navRows[root.rowIndex])
+                event.accepted = true
+              }
+            }
+          }
+        }
+
+        // Quick picks, plus whichever section is folded open. A ListView
+        // rather than a Column+Repeater so a long artist/album list scrolls
+        // on its own, capped and clipped, instead of inflating column's
+        // implicitHeight and dragging the search box and now-playing card
+        // off screen with it -- the same shape network/Panel.qml's wifi
+        // list and Ui/SearchableDropdown.qml use. currentIndex tracks
+        // root.rowIndex so j/k navigation (via keyCatcher/moveCursor above)
+        // scrolls the selected row into view instead of walking off the
+        // visible window blind.
+        ListView {
+          width: parent.width
+          visible: root.loggedIn && root.detailsExpanded
+          height: Math.min(contentHeight, Style.space(280))
+          // Same gap CursorSurface rows use in stappmus.activity-monitor's
+          // process list -- the row itself carries the padding, so the
+          // list only needs a hairline of separation, not a hairline that
+          // is also expected to double as the padding.
+          spacing: Style.spacing.xxs
+          clip: true
+          boundsBehavior: Flickable.StopAtBounds
+          ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+          model: root.navRows
+          currentIndex: root.rowIndex
+          onCurrentIndexChanged: if (currentIndex >= 0) positionViewAtIndex(currentIndex, ListView.Contain)
+
+          // CursorSurface is the same background/border/hover chrome the
+          // wifi network list and the process list build their rows on --
+          // adopting it directly, instead of a hand-rolled highlight
+          // Rectangle, is what makes these rows match.
+          delegate: CursorSurface {
+            id: navRow
+            required property var modelData
+            required property int index
+            width: ListView.view.width
+            implicitHeight: Style.spacing.controlHeight
+            readonly property bool isCurrent: modelData.kind === "queued"
+              && modelData.glyph !== ""
+            readonly property bool opens: root.isOpenable(modelData)
+
+            foreground: root.foreground
+            // Per CursorSurface's contract, hasCursor is the only thing
+            // allowed to drive the highlight -- rowArea below folds mouse
+            // hover into root.cursorActive/rowIndex rather than painting
+            // its own, so keyboard and mouse can never show two different
+            // rows highlighted at once.
+            hasCursor: root.rowCursorVisible && root.rowIndex === index
+            // The currently-queued track keeps its highlight even once the
+            // cursor has moved off it, the way wifi keeps the connected
+            // network lit.
+            current: isCurrent
+
+            Text {
+              id: rowGlyph
+              anchors.left: parent.left
+              anchors.leftMargin: Style.spacing.md
+              anchors.verticalCenter: parent.verticalCenter
+              // Queue rows keep the column even when empty, so titles line
+              // up instead of stepping right for the one that is playing.
+              visible: modelData.glyph !== "" || modelData.kind === "queued"
+              width: modelData.kind === "queued" ? Style.space(11) : implicitWidth
+              text: modelData.glyph
+              color: isCurrent ? root.foreground : root.dim
+              font.family: root.fontFamily
+              font.pixelSize: modelData.kind === "queued" ? Style.font.caption : Style.font.body
+            }
+
+            Text {
+              anchors.left: rowGlyph.visible ? rowGlyph.right : parent.left
+              anchors.leftMargin: rowGlyph.visible ? Style.space(8) : Style.spacing.md
+              anchors.right: chevron.visible ? chevron.left : parent.right
+              anchors.rightMargin: chevron.visible ? Style.space(6) : Style.spacing.md
+              anchors.verticalCenter: parent.verticalCenter
+              // Deliberately a block, not the one-line ternary this was.
+              // As an optimised single-expression binding it gets
+              // evaluated once before the delegate has injected
+              // modelData, resolves to undefined, and logs "Unable to
+              // assign [undefined] to QString" -- once per row per
+              // rebuild, and the model rebuilds on every status poll. The
+              // row rendered fine either way; the journal did not.
+              text: {
+                var label = modelData && modelData.label !== undefined ? modelData.label : ""
+                var detail = modelData ? modelData.detail : ""
+                return detail ? label + "  ·  " + detail : label
+              }
+              // In the queue only the track playing carries full weight;
+              // the rest is context you scan past -- as is the trail back,
+              // which says where you are rather than offering anything.
+              color: modelData.kind === "note" || modelData.kind === "back" ? root.dim
+                : (modelData.kind === "queued" && !isCurrent ? root.dim : root.foreground)
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              // A trail too long for the panel loses its head rather than
+              // its tail: where you are is the part worth keeping.
+              elide: modelData.kind === "back" ? Text.ElideLeft : Text.ElideRight
+            }
+
+            Text {
+              id: chevron
+              anchors.right: parent.right
+              anchors.rightMargin: Style.spacing.md
+              anchors.verticalCenter: parent.verticalCenter
+              // Above the row's own click area, so opening something and
+              // playing it are two targets rather than one guess.
+              z: 1
+              visible: opens
+              text: root.glyphOpen
+              color: chevronArea.containsMouse ? root.foreground : root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.bodySmall
 
               MouseArea {
-                id: clearSearchArea
+                id: chevronArea
                 anchors.fill: parent
                 anchors.margins: -Style.space(6)
                 hoverEnabled: true
-                enabled: root.searchMode
+                enabled: opens
                 cursorShape: Qt.PointingHandCursor
                 onClicked: {
-                  root.clearSearch()
-                  searchField.forceActiveFocus()
+                  root.cursorActive = false
+                  root.openRow(modelData)
                 }
               }
             }
-          }
 
-          // Quick picks, plus whichever section is folded open.
-          Column {
-            width: parent.width
-            visible: root.loggedIn && root.detailsExpanded
-            spacing: Style.space(1)
-
-            Repeater {
-              model: root.navRows
-
-              Item {
-                required property var modelData
-                required property int index
-                width: parent.width
-                implicitHeight: Style.space(22)
-                readonly property bool isCurrent: modelData.kind === "queued"
-                  && modelData.glyph !== ""
-                readonly property bool hasCursor: root.cursorActive && root.rowIndex === index
-                readonly property bool opens: root.isOpenable(modelData)
-
-                Rectangle {
-                  anchors.fill: parent
-                  anchors.margins: -Style.space(2)
-                  radius: Style.space(4)
-                  visible: hasCursor || rowArea.containsMouse
-                  color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.10)
-                }
-
-                Text {
-                  id: rowGlyph
-                  anchors.left: parent.left
-                  anchors.verticalCenter: parent.verticalCenter
-                  // Queue rows keep the column even when empty, so titles line
-                  // up instead of stepping right for the one that is playing.
-                  visible: modelData.glyph !== "" || modelData.kind === "queued"
-                  width: modelData.kind === "queued" ? Style.space(11) : implicitWidth
-                  text: modelData.glyph
-                  color: isCurrent ? root.foreground : root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: modelData.kind === "queued" ? Style.font.caption : Style.font.body
-                }
-
-                Text {
-                  anchors.left: rowGlyph.visible ? rowGlyph.right : parent.left
-                  anchors.leftMargin: rowGlyph.visible ? Style.space(8) : 0
-                  anchors.right: chevron.visible ? chevron.left : parent.right
-                  anchors.rightMargin: Style.space(6)
-                  anchors.verticalCenter: parent.verticalCenter
-                  // Deliberately a block, not the one-line ternary this was.
-                  // As an optimised single-expression binding it gets
-                  // evaluated once before the Repeater has injected
-                  // modelData, resolves to undefined, and logs "Unable to
-                  // assign [undefined] to QString" -- once per row per
-                  // rebuild, and the model rebuilds on every status poll. The
-                  // row rendered fine either way; the journal did not.
-                  text: {
-                    var label = modelData && modelData.label !== undefined ? modelData.label : ""
-                    var detail = modelData ? modelData.detail : ""
-                    return detail ? label + "  ·  " + detail : label
-                  }
-                  // In the queue only the track playing carries full weight;
-                  // the rest is context you scan past -- as is the trail back,
-                  // which says where you are rather than offering anything.
-                  color: modelData.kind === "note" || modelData.kind === "back" ? root.dim
-                    : (modelData.kind === "queued" && !isCurrent ? root.dim : root.foreground)
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.body
-                  // A trail too long for the panel loses its head rather than
-                  // its tail: where you are is the part worth keeping.
-                  elide: modelData.kind === "back" ? Text.ElideLeft : Text.ElideRight
-                }
-
-                Text {
-                  id: chevron
-                  anchors.right: parent.right
-                  anchors.verticalCenter: parent.verticalCenter
-                  // Above the row's own click area, so opening something and
-                  // playing it are two targets rather than one guess.
-                  z: 1
-                  visible: opens
-                  text: root.glyphOpen
-                  color: chevronArea.containsMouse ? root.foreground : root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.bodySmall
-
-                  MouseArea {
-                    id: chevronArea
-                    anchors.fill: parent
-                    anchors.margins: -Style.space(6)
-                    hoverEnabled: true
-                    enabled: opens
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: {
-                      root.cursorActive = false
-                      root.openRow(modelData)
-                    }
-                  }
-                }
-
-                MouseArea {
-                  id: rowArea
-                  anchors.fill: parent
-                  hoverEnabled: true
-                  enabled: modelData.kind !== "note"
-                  cursorShape: Qt.PointingHandCursor
-                  onClicked: {
-                    root.cursorActive = false
-                    root.activateRow(modelData)
-                  }
-                }
+            MouseArea {
+              id: rowArea
+              anchors.fill: parent
+              hoverEnabled: true
+              enabled: modelData.kind !== "note"
+              cursorShape: Qt.PointingHandCursor
+              // Mouse entering claims the shared cursor the way wifi's row
+              // does; leaving does not clear it, so the highlight stays
+              // put and j/k pick up from here rather than from wherever
+              // the keyboard cursor last was. playerIndex is reset too --
+              // otherwise hovering a row while the cursor was parked on a
+              // player stop would move rowIndex here but rowCursorVisible
+              // would stay false, and nothing would visibly highlight.
+              onContainsMouseChanged: if (containsMouse) {
+                root.cursorActive = true
+                root.playerIndex = -1
+                root.rowIndex = index
+              }
+              onClicked: {
+                root.cursorActive = false
+                root.activateRow(modelData)
               }
             }
           }
+        }
 
-          // Errors from the CLI, which already phrases them for a human.
-          Text {
-            width: parent.width
-            visible: root.notice !== "" && root.detailsExpanded
-            text: root.notice
-            color: bar ? bar.urgent : Color.urgent
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-            wrapMode: Text.WordWrap
-          }
+        // Errors from the CLI, which already phrases them for a human.
+        Text {
+          width: parent.width
+          visible: root.notice !== "" && root.detailsExpanded
+          text: root.notice
+          color: bar ? bar.urgent : Color.urgent
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.WordWrap
         }
       }
     }
