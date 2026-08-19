@@ -42,9 +42,6 @@ Panel {
   // open in place: right goes a level in, left comes back out.
   readonly property string glyphOpen: String.fromCodePoint(0xF0142)
   readonly property string glyphBack: String.fromCodePoint(0xF0141)
-  readonly property string glyphVolume: String.fromCodePoint(0xF057E)
-  readonly property string glyphVolumeLow: String.fromCodePoint(0xF057F)
-  readonly property string glyphVolumeOff: String.fromCodePoint(0xF0581)
   readonly property string glyphQueue: String.fromCodePoint(0xF0279)
   readonly property string glyphArtist: String.fromCodePoint(0xF0803)
   readonly property string glyphAlbum: String.fromCodePoint(0xF0025)
@@ -98,22 +95,13 @@ Panel {
   // not how anyone finds anything. The rest is a keystroke away in the box.
   readonly property int browseRowCap: 200
 
-  // While the slider is being dragged, the 1s status poll must not yank the
-  // knob back to the level mpv had a moment ago.
-  property int volumeOverride: -1
-  // The level still waiting to be written out. Kept apart from volumeOverride,
-  // which a status poll is free to clear at any moment: the write timer used
-  // to read that one when it fired, so a poll landing in the gap turned the
-  // pending write into "volume -1" -- which the CLI clamped to 0 and muted the
-  // music for no reason anybody could see.
-  property int pendingVolume: -1
-  readonly property int volume: volumeOverride >= 0
-    ? volumeOverride
-    : (playback && playback.volume !== undefined ? playback.volume : 70)
-
   readonly property bool barVertical: bar ? bar.vertical === true : false
 
   readonly property var track: playback && playback.track ? playback.track : null
+  // A track ending -- or starting -- resizes the player stop list out from
+  // under a cursor that was sitting in it; clamp back onto whatever is still
+  // there rather than pointing past the end.
+  onTrackChanged: if (playerIndex >= playerStopCount) playerIndex = playerStopCount - 1
   readonly property bool playing: playback ? playback.playing === true : false
   readonly property bool paused: playback ? playback.paused === true : false
   readonly property bool loggedIn: account && account.configured === true
@@ -123,9 +111,9 @@ Panel {
 
   readonly property string tooltip: {
     if (!loggedIn) return "Jellyfin Music — not connected"
-    if (!track) return "Jellyfin Music — scroll to set volume (" + volume + "%)"
+    if (!track) return "Jellyfin Music — nothing playing"
     var artist = track.artist ? track.artist + " — " : ""
-    return (paused ? "Paused: " : "") + artist + track.title + "  ·  " + volume + "%"
+    return (paused ? "Paused: " : "") + artist + track.title
   }
 
   function kindGlyph(kind) {
@@ -324,12 +312,69 @@ Panel {
     if (rowIndex < 0) rowIndex = 0
   }
 
-  // The first press shows the cursor where it already is rather than moving
-  // it, so nothing jumps under a key you pressed to find your place.
+  // The player controls, from the cursor's perspective, are a short vertical
+  // stack sitting above the row list -- the seek bar (only with something to
+  // seek), then prev, play/pause, next -- even though on screen the buttons
+  // sit beside the seek bar rather than under it. -1 means the cursor is
+  // down in the row list instead; 0.._playerStopCount-1 indexes this stack.
+  property int playerIndex: -1
+  readonly property int _playerSeekOffset: track !== null ? 1 : 0
+  readonly property int playerStopCount: _playerSeekOffset + 3
+
+  // The CLI verb a stop performs -- which doubles as its identity, since
+  // "seek" is the one stop that is not itself a command argument.
+  function playerStopKind(i) {
+    if (_playerSeekOffset === 1 && i === 0) return "seek"
+    var t = i - _playerSeekOffset
+    return t === 0 ? "prev" : (t === 1 ? "toggle" : "next")
+  }
+
+  // j/k out of the top of the list reaches the player stack, landing on
+  // whichever stop is nearest the list (next, or prev if there is no seek
+  // bar) -- the same "enter a group from its near edge" rule the display
+  // widget uses for its sections. j/k walk the stack from there; running off
+  // its top does nothing further, and off its bottom returns to the list.
   function moveCursor(step) {
     if (!cursorActive) { cursorActive = true; return }
+    if (playerIndex >= 0) {
+      var next = playerIndex + step
+      if (next < 0) return
+      if (next >= playerStopCount) { playerIndex = -1; rowIndex = 0; clampCursor(); return }
+      playerIndex = next
+      return
+    }
+    if (step < 0 && rowIndex === 0 && path.length === 0) {
+      playerIndex = playerStopCount - 1
+      return
+    }
     rowIndex += step
     clampCursor()
+  }
+
+  readonly property int seekStepSeconds: 10
+
+  // A direct seek per keypress rather than a live-dragged preview: h/l is a
+  // nudge, not a drag, and send() already collapses a run of quick presses
+  // into just the last one.
+  function seekBy(deltaSeconds) {
+    if (!track) return
+    var duration = playback.duration || 0
+    var current = playback.elapsed || 0
+    var next = Math.max(0, Math.min(duration, current + deltaSeconds))
+    send(["seek", String(Math.round(next))])
+  }
+
+  // h/l on the seek stop scrubs, same as h/l on the display widget's
+  // brightness slider; on a transport stop they walk prev/play/next instead,
+  // the same as h/l on that widget's scale-preset row -- and stay inside the
+  // transport rather than spilling into the seek bar or the list, so the two
+  // meanings of the key never fight over one press.
+  function movePlayerCursorH(step) {
+    var kind = playerStopKind(playerIndex)
+    if (kind === "seek") { seekBy(step * seekStepSeconds); return }
+    var next = playerIndex + step
+    if (next < _playerSeekOffset || next >= playerStopCount) return
+    playerIndex = next
   }
 
   // What a track queues -- and it is never the one track on its own, but the
@@ -480,20 +525,6 @@ Panel {
     searchField.text = ""
     results = []
     resultsQuery = ""
-  }
-
-  // Volume changes arrive far faster than a process can be spawned per pixel
-  // of drag, so the level is shown immediately and written out on a short
-  // debounce.
-  function setVolume(level) {
-    volumeOverride = Math.max(0, Math.min(100, Math.round(level)))
-    pendingVolume = volumeOverride
-    volumeWriteTimer.restart()
-    volumeReleaseTimer.restart()
-  }
-
-  function stepVolume(direction) {
-    setVolume(volume + direction * 5)
   }
 
   function refreshAccount() {
@@ -668,41 +699,6 @@ Panel {
     onTriggered: root.runSearch()
   }
 
-  Process {
-    id: volumeProc
-    running: false
-    onExited: root.refresh()
-  }
-
-  Timer {
-    id: volumeWriteTimer
-    interval: 120
-    repeat: false
-    onTriggered: {
-      if (root.pendingVolume < 0) return
-      if (volumeProc.running) { volumeWriteTimer.restart(); return }
-      volumeProc.command = [root.cli, "volume", String(root.pendingVolume)]
-      root.pendingVolume = -1
-      volumeProc.running = true
-    }
-  }
-
-  Timer {
-    // Safety net: normally the override is dropped as soon as a poll reports
-    // the level we asked for, but a failed write must not freeze the slider.
-    id: volumeReleaseTimer
-    interval: 3000
-    repeat: false
-    onTriggered: root.volumeOverride = -1
-  }
-
-  onPlaybackChanged: {
-    if (volumeOverride >= 0 && playback && playback.volume === volumeOverride) {
-      volumeOverride = -1
-      volumeReleaseTimer.stop()
-    }
-  }
-
   Timer {
     id: settleTimer
     interval: 350
@@ -730,6 +726,9 @@ Panel {
   onOpenedChanged: {
     if (opened) {
       cursorActive = false
+      // Lands on the seek bar first, the way the display widget lands on its
+      // brightness slider -- not several sections down in the library.
+      playerIndex = track !== null ? 0 : -1
       refresh()
       refreshAccount()
     } else {
@@ -740,6 +739,7 @@ Panel {
       queueIndex = -1
       notice = ""
       passwordField.text = ""
+      playerIndex = -1
       // Opening the panel again is usually a glance at what is playing, not a
       // return to the search you left behind.
       clearSearch()
@@ -765,10 +765,6 @@ Panel {
       else if (buttonCode === Qt.MiddleButton) root.send(["next"])
       else root.toggle()
     }
-    // Scroll adjusts volume rather than skipping tracks: it is the thing you
-    // reach for mid-song, and it works without opening the panel. Skipping
-    // lives on middle-click, the panel buttons, and n/p.
-    onWheelMoved: function(delta) { root.stepVolume(delta > 0 ? 1 : -1) }
 
     Row {
       id: barContent
@@ -802,20 +798,39 @@ Panel {
       // password -- or a band name -- would trigger playback shortcuts.
       blocked: !root.loggedIn || searchField.activeFocus
       // Sideways walks the library the way the chevrons do: right opens what
-      // the cursor is on, left steps back out of the level you are in.
+      // the cursor is on, left steps back out of the level you are in -- or,
+      // on a player stop, sideways moves the way h/l does on the display
+      // widget: scrubbing on the seek bar, walking prev/play/next on a
+      // transport button.
       onMoveRequested: function(dx, dy) {
         if (dx > 0) {
           // Same courtesy the first j or k gets: show the cursor where it
-          // already is rather than opening whatever it happened to rest on.
+          // already is rather than acting on whatever it happened to rest on.
           if (!root.cursorActive) { root.cursorActive = true; return }
-          root.openRow(root.navRows[root.rowIndex])
+          if (root.playerIndex >= 0) root.movePlayerCursorH(1)
+          else root.openRow(root.navRows[root.rowIndex])
         } else if (dx < 0) {
-          root.popLevel()
+          if (root.playerIndex >= 0) {
+            if (!root.cursorActive) { root.cursorActive = true; return }
+            root.movePlayerCursorH(-1)
+          } else {
+            // Stepping back out of a level needs no reveal first: there is
+            // nothing ambiguous about "go up", unlike opening a row.
+            root.popLevel()
+          }
         } else {
           root.moveCursor(dy)
         }
       }
-      onActivateRequested: if (root.cursorActive) root.activateRow(root.navRows[root.rowIndex])
+      onActivateRequested: {
+        if (!root.cursorActive) return
+        if (root.playerIndex >= 0) {
+          var kind = root.playerStopKind(root.playerIndex)
+          root.send([kind === "seek" ? "toggle" : kind])
+        } else {
+          root.activateRow(root.navRows[root.rowIndex])
+        }
+      }
       // A ladder out, so Escape never throws away more than you meant.
       onCloseRequested: if (root.path.length > 0) root.popLevel(); else root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
@@ -824,8 +839,6 @@ Panel {
         else if (t === "n") root.send(["next"])
         else if (t === "p") root.send(["prev"])
         else if (t === "s") root.send(["play", "--shuffle", "--limit", String(root.setting("shuffleLimit", 200))])
-        else if (t === "+" || t === "=") root.stepVolume(1)
-        else if (t === "-" || t === "_") root.stepVolume(-1)
         // "/" for search, the way a pager or a browser does it.
         else if (t === "/") searchField.forceActiveFocus()
       }
@@ -844,7 +857,7 @@ Panel {
         Column {
           id: column
           width: panelFlick.width
-          spacing: Style.space(10)
+          spacing: Style.space(8)
 
           // Connect. There is nothing else the panel can usefully do before
           // an account exists, so this is the whole of it -- no server
@@ -897,20 +910,24 @@ Panel {
             }
           }
 
-          // Now playing.
+          // Now playing: art on the left, title/artist/album/scrubber to its
+          // right, transport below both -- spanning the full width, flush
+          // with the art's left edge, rather than starting where the text
+          // column does.
           Item {
             width: parent.width
             visible: root.loggedIn
-            implicitHeight: Math.max(artFrame.height, nowInfo.implicitHeight)
+            implicitHeight: Math.max(artFrame.height, infoColumn.height)
+              + Style.space(seekBlock.visible ? 6 : 8) + transportBlock.implicitHeight
 
             Rectangle {
               id: artFrame
               anchors.left: parent.left
               anchors.top: parent.top
               visible: root.showArt && root.track !== null
-              width: visible ? Style.space(64) : 0
-              height: visible ? Style.space(64) : 0
-              radius: Style.space(3)
+              width: visible ? Style.space(80) : 0
+              height: visible ? Style.space(80) : 0
+              radius: Style.space(6)
               color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.08)
               clip: true
 
@@ -918,8 +935,8 @@ Panel {
                 id: artImage
                 anchors.fill: parent
                 source: root.showArt && root.playback.art ? root.playback.art : ""
-                sourceSize.width: 192
-                sourceSize.height: 192
+                sourceSize.width: 160
+                sourceSize.height: 160
                 fillMode: Image.PreserveAspectCrop
                 asynchronous: true
                 cache: true
@@ -937,163 +954,158 @@ Panel {
               }
             }
 
-            Column {
-              id: nowInfo
+            Item {
+              id: infoColumn
               anchors.left: artFrame.visible ? artFrame.right : parent.left
-              anchors.leftMargin: artFrame.visible ? Style.space(10) : 0
-              anchors.right: parent.right
-              anchors.rightMargin: Style.space(8)
-              anchors.top: parent.top
-              spacing: Style.space(2)
-
-              Text {
-                width: parent.width
-                text: root.track ? root.track.title : (root.loggedIn ? "Nothing playing" : "Connect a server to start")
-                color: root.foreground
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.subtitle
-                elide: Text.ElideRight
-              }
-
-              Text {
-                width: parent.width
-                visible: root.track && root.track.artist !== ""
-                text: root.track ? root.track.artist : ""
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
-                elide: Text.ElideRight
-              }
-
-              Text {
-                width: parent.width
-                visible: root.track && root.track.album !== ""
-                text: root.track ? root.track.album : ""
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                elide: Text.ElideRight
-              }
-            }
-          }
-
-          // Seek. A slider rather than a plain bar, because it sits right
-          // above the volume slider and looking identical while behaving
-          // differently is the sort of thing that teaches people not to trust
-          // a control.
-          Item {
-            width: parent.width
-            visible: root.track !== null
-            implicitHeight: seekSlider.implicitHeight + elapsedLabel.implicitHeight + Style.space(2)
-
-            PanelSlider {
-              id: seekSlider
-              bar: root.bar
-              anchors.left: parent.left
+              anchors.leftMargin: artFrame.visible ? Style.space(12) : 0
               anchors.right: parent.right
               anchors.top: parent.top
-              minimum: 0
-              maximum: Math.max(1, root.playback.duration || 1)
-              step: 1
-              integer: true
-              value: root.playback.elapsed || 0
-              onReleased: function(position) { root.send(["seek", String(Math.round(position))]) }
-            }
+              implicitHeight: textStack.implicitHeight
+                + (seekBlock.visible ? Style.space(8) + seekBlock.implicitHeight : 0)
+              height: implicitHeight
 
-            Text {
-              id: elapsedLabel
-              anchors.left: parent.left
-              anchors.top: seekSlider.bottom
-              anchors.topMargin: Style.space(2)
-              text: root.playback.elapsedText || "0:00"
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-            }
-
-            Text {
-              anchors.right: parent.right
-              anchors.top: seekSlider.bottom
-              anchors.topMargin: Style.space(2)
-              text: root.playback.durationText || "0:00"
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-            }
-          }
-
-          // Transport and volume share a row: four stacked control bands made
-          // the player half taller than the library half for no good reason.
-          Item {
-            width: parent.width
-            visible: root.loggedIn
-            implicitHeight: Math.max(transport.implicitHeight, volumeSlider.implicitHeight)
-
-            Row {
-              id: transport
-              anchors.left: parent.left
-              anchors.verticalCenter: parent.verticalCenter
-              spacing: Style.space(14)
-
-              Repeater {
-                model: [
-                  { glyph: root.glyphPrev, action: "prev" },
-                  { glyph: root.playing ? root.glyphPause : root.glyphPlay, action: "toggle" },
-                  { glyph: root.glyphNext, action: "next" }
-                ]
+              Column {
+                id: textStack
+                width: parent.width
+                spacing: Style.space(2)
 
                 Text {
-                  required property var modelData
-                  required property int index
-                  anchors.verticalCenter: parent.verticalCenter
-                  text: modelData.glyph
-                  color: transportArea.containsMouse ? root.foreground
-                    : (index === 1 ? root.foreground : root.dim)
+                  width: parent.width
+                  text: root.track ? root.track.title : (root.loggedIn ? "Nothing playing" : "Connect a server to start")
+                  color: root.foreground
                   font.family: root.fontFamily
-                  // Play/pause is the primary action, so it carries more weight
-                  // than the two it sits between.
-                  font.pixelSize: index === 1 ? Style.font.display : Style.font.icon
+                  font.pixelSize: Style.font.subtitle
+                  elide: Text.ElideRight
+                }
 
-                  MouseArea {
-                    id: transportArea
+                Text {
+                  width: parent.width
+                  visible: root.track && root.track.artist !== ""
+                  text: root.track ? root.track.artist : ""
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  elide: Text.ElideRight
+                }
+
+                Text {
+                  width: parent.width
+                  visible: root.track && root.track.album !== ""
+                  text: root.track ? root.track.album : ""
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  elide: Text.ElideRight
+                }
+              }
+
+              // Wrapped in the same cursor chrome the display widget's
+              // brightness slider uses, so j/k reaching this row and h/l
+              // seeking it look like the rest of the kit rather than a mouse
+              // afterthought. Keyboard and mouse focus share this one
+              // highlight, per CursorSurface's contract.
+              Item {
+                id: seekBlock
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: textStack.bottom
+                anchors.topMargin: Style.space(8)
+                visible: root.track !== null
+                implicitHeight: seekSurface.height
+                height: implicitHeight
+
+                CursorSurface {
+                  id: seekSurface
+                  anchors.left: parent.left
+                  anchors.right: elapsedLabel.left
+                  anchors.rightMargin: Style.space(8)
+                  anchors.top: parent.top
+                  height: seekSlider.implicitHeight + Style.spacing.controlGap
+                  hasCursor: root.cursorActive && root.playerIndex === 0
+                  foreground: root.foreground
+                  outline: true
+
+                  PanelSlider {
+                    id: seekSlider
+                    bar: root.bar
                     anchors.fill: parent
-                    anchors.margins: -Style.space(4)
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: root.send([parent.modelData.action])
+                    anchors.leftMargin: Style.space(6)
+                    anchors.rightMargin: Style.space(6)
+                    minimum: 0
+                    maximum: Math.max(1, root.playback.duration || 1)
+                    step: 1
+                    integer: true
+                    value: root.playback.elapsed || 0
+                    onReleased: function(position) { root.send(["seek", String(Math.round(position))]) }
                   }
+
+                  HoverHandler {
+                    onHoveredChanged: if (hovered) {
+                      root.cursorActive = true
+                      root.playerIndex = 0
+                    }
+                  }
+                }
+
+                // Elapsed only, beside the scrubber -- how far into the
+                // track you are is what matters glancing at a bar; the
+                // duration is right there as how far the bar has left to go.
+                Text {
+                  id: elapsedLabel
+                  anchors.right: parent.right
+                  anchors.verticalCenter: seekSurface.verticalCenter
+                  text: root.playback.elapsedText || "0:00"
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
                 }
               }
             }
 
-            Text {
-              id: volumeValue
+            // Transport, its own row spanning the full width below both the
+            // art and the text column, centered in it -- prev, play/pause,
+            // next, all borderless and one size, play/pause simply brighter
+            // as the primary action.
+            Item {
+              id: transportBlock
+              anchors.left: parent.left
               anchors.right: parent.right
-              anchors.verticalCenter: parent.verticalCenter
-              text: root.volume + "%"
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              // Fixed width so the slider does not twitch as the number grows.
-              horizontalAlignment: Text.AlignRight
-              width: Style.space(30)
-            }
+              anchors.top: artFrame.height > infoColumn.height ? artFrame.bottom : infoColumn.bottom
+              anchors.topMargin: Style.space(seekBlock.visible ? 6 : 8)
+              implicitHeight: transport.implicitHeight
+              height: implicitHeight
 
-            PanelSlider {
-              id: volumeSlider
-              bar: root.bar
-              anchors.left: transport.right
-              anchors.right: volumeValue.left
-              anchors.leftMargin: Style.space(14)
-              anchors.rightMargin: Style.space(6)
-              anchors.verticalCenter: parent.verticalCenter
-              minimum: 0
-              maximum: 100
-              step: 5
-              integer: true
-              value: root.volume
-              onMoved: function(level) { root.setVolume(level) }
-              onReleased: function(level) { root.setVolume(level) }
+              Row {
+                id: transport
+                anchors.horizontalCenter: parent.horizontalCenter
+                spacing: Style.space(6)
+
+                Repeater {
+                  model: [
+                    { glyph: root.glyphPrev, action: "prev", primary: false },
+                    { glyph: root.playing ? root.glyphPause : root.glyphPlay, action: "toggle", primary: true },
+                    { glyph: root.glyphNext, action: "next", primary: false }
+                  ]
+
+                  Button {
+                    required property var modelData
+                    required property int index
+                    iconText: modelData.glyph
+                    foreground: modelData.primary ? root.foreground : root.dim
+                    fontFamily: root.fontFamily
+                    iconSize: Style.font.icon
+                    hasCursor: root.cursorActive
+                      && root.playerIndex === root._playerSeekOffset + index
+                    onClicked: root.send([modelData.action])
+                    onHovered: function(h) {
+                      if (h) {
+                        root.cursorActive = true
+                        root.playerIndex = root._playerSeekOffset + index
+                      }
+                    }
+                  }
+                }
+              }
             }
           }
 
