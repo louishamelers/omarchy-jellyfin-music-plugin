@@ -857,7 +857,7 @@ Panel {
         Column {
           id: column
           width: panelFlick.width
-          spacing: Style.space(10)
+          spacing: Style.space(8)
 
           // Connect. There is nothing else the panel can usefully do before
           // an account exists, so this is the whole of it -- no server
@@ -910,20 +910,24 @@ Panel {
             }
           }
 
-          // Now playing.
+          // Now playing: art on the left, title/artist/album/scrubber to its
+          // right, transport below both -- spanning the full width, flush
+          // with the art's left edge, rather than starting where the text
+          // column does.
           Item {
             width: parent.width
             visible: root.loggedIn
-            implicitHeight: Math.max(artFrame.height, nowInfo.implicitHeight)
+            implicitHeight: Math.max(artFrame.height, infoColumn.height)
+              + Style.space(seekBlock.visible ? 6 : 8) + transportBlock.implicitHeight
 
             Rectangle {
               id: artFrame
               anchors.left: parent.left
               anchors.top: parent.top
               visible: root.showArt && root.track !== null
-              width: visible ? Style.space(64) : 0
-              height: visible ? Style.space(64) : 0
-              radius: Style.space(3)
+              width: visible ? Style.space(80) : 0
+              height: visible ? Style.space(80) : 0
+              radius: Style.space(6)
               color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.08)
               clip: true
 
@@ -931,8 +935,8 @@ Panel {
                 id: artImage
                 anchors.fill: parent
                 source: root.showArt && root.playback.art ? root.playback.art : ""
-                sourceSize.width: 192
-                sourceSize.height: 192
+                sourceSize.width: 160
+                sourceSize.height: 160
                 fillMode: Image.PreserveAspectCrop
                 asynchronous: true
                 cache: true
@@ -950,152 +954,158 @@ Panel {
               }
             }
 
-            Column {
-              id: nowInfo
+            Item {
+              id: infoColumn
               anchors.left: artFrame.visible ? artFrame.right : parent.left
-              anchors.leftMargin: artFrame.visible ? Style.space(10) : 0
+              anchors.leftMargin: artFrame.visible ? Style.space(12) : 0
               anchors.right: parent.right
-              anchors.rightMargin: Style.space(8)
               anchors.top: parent.top
-              spacing: Style.space(2)
+              implicitHeight: textStack.implicitHeight
+                + (seekBlock.visible ? Style.space(8) + seekBlock.implicitHeight : 0)
+              height: implicitHeight
 
-              Text {
+              Column {
+                id: textStack
                 width: parent.width
-                text: root.track ? root.track.title : (root.loggedIn ? "Nothing playing" : "Connect a server to start")
-                color: root.foreground
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.subtitle
-                elide: Text.ElideRight
+                spacing: Style.space(2)
+
+                Text {
+                  width: parent.width
+                  text: root.track ? root.track.title : (root.loggedIn ? "Nothing playing" : "Connect a server to start")
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.subtitle
+                  elide: Text.ElideRight
+                }
+
+                Text {
+                  width: parent.width
+                  visible: root.track && root.track.artist !== ""
+                  text: root.track ? root.track.artist : ""
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  elide: Text.ElideRight
+                }
+
+                Text {
+                  width: parent.width
+                  visible: root.track && root.track.album !== ""
+                  text: root.track ? root.track.album : ""
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  elide: Text.ElideRight
+                }
               }
 
-              Text {
-                width: parent.width
-                visible: root.track && root.track.artist !== ""
-                text: root.track ? root.track.artist : ""
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
-                elide: Text.ElideRight
-              }
+              // Wrapped in the same cursor chrome the display widget's
+              // brightness slider uses, so j/k reaching this row and h/l
+              // seeking it look like the rest of the kit rather than a mouse
+              // afterthought. Keyboard and mouse focus share this one
+              // highlight, per CursorSurface's contract.
+              Item {
+                id: seekBlock
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: textStack.bottom
+                anchors.topMargin: Style.space(8)
+                visible: root.track !== null
+                implicitHeight: seekSurface.height
+                height: implicitHeight
 
-              Text {
-                width: parent.width
-                visible: root.track && root.track.album !== ""
-                text: root.track ? root.track.album : ""
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                elide: Text.ElideRight
+                CursorSurface {
+                  id: seekSurface
+                  anchors.left: parent.left
+                  anchors.right: elapsedLabel.left
+                  anchors.rightMargin: Style.space(8)
+                  anchors.top: parent.top
+                  height: seekSlider.implicitHeight + Style.spacing.controlGap
+                  hasCursor: root.cursorActive && root.playerIndex === 0
+                  foreground: root.foreground
+                  outline: true
+
+                  PanelSlider {
+                    id: seekSlider
+                    bar: root.bar
+                    anchors.fill: parent
+                    anchors.leftMargin: Style.space(6)
+                    anchors.rightMargin: Style.space(6)
+                    minimum: 0
+                    maximum: Math.max(1, root.playback.duration || 1)
+                    step: 1
+                    integer: true
+                    value: root.playback.elapsed || 0
+                    onReleased: function(position) { root.send(["seek", String(Math.round(position))]) }
+                  }
+
+                  HoverHandler {
+                    onHoveredChanged: if (hovered) {
+                      root.cursorActive = true
+                      root.playerIndex = 0
+                    }
+                  }
+                }
+
+                // Elapsed only, beside the scrubber -- how far into the
+                // track you are is what matters glancing at a bar; the
+                // duration is right there as how far the bar has left to go.
+                Text {
+                  id: elapsedLabel
+                  anchors.right: parent.right
+                  anchors.verticalCenter: seekSurface.verticalCenter
+                  text: root.playback.elapsedText || "0:00"
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
               }
             }
-          }
 
-          // Seek and transport share a row: the scrubber and the transport
-          // buttons say the same thing about where playback stands, so there
-          // is no reason for one to sit above the other.
-          Item {
-            width: parent.width
-            visible: root.loggedIn
-            implicitHeight: (seekSurface.visible
-              ? Math.max(seekSurface.height, transport.implicitHeight) + elapsedLabel.implicitHeight + Style.space(2)
-              : transport.implicitHeight)
-
-            // The Button component rather than a bare glyph, for its hover
-            // and keyboard-cursor fill -- borderless, so three icons this
-            // close together don't turn into a row of boxes.
-            Row {
-              id: transport
+            // Transport, flush with the art's left edge -- its own row below
+            // both the art and the text column, not tucked under just one of
+            // them. prev, play/pause, next, all borderless and one size,
+            // play/pause simply brighter as the primary action.
+            Item {
+              id: transportBlock
+              anchors.left: parent.left
               anchors.right: parent.right
-              anchors.verticalCenter: seekSurface.verticalCenter
-              spacing: Style.space(6)
+              anchors.top: artFrame.height > infoColumn.height ? artFrame.bottom : infoColumn.bottom
+              anchors.topMargin: Style.space(seekBlock.visible ? 6 : 8)
+              implicitHeight: transport.implicitHeight
+              height: implicitHeight
 
-              Repeater {
-                model: [
-                  { glyph: root.glyphPrev, action: "prev", primary: false },
-                  { glyph: root.playing ? root.glyphPause : root.glyphPlay, action: "toggle", primary: true },
-                  { glyph: root.glyphNext, action: "next", primary: false }
-                ]
+              Row {
+                id: transport
+                anchors.left: parent.left
+                spacing: Style.space(6)
 
-                Button {
-                  required property var modelData
-                  required property int index
-                  iconText: modelData.glyph
-                  foreground: modelData.primary ? root.foreground : root.dim
-                  fontFamily: root.fontFamily
-                  iconSize: Style.font.icon
-                  hasCursor: root.cursorActive
-                    && root.playerIndex === root._playerSeekOffset + index
-                  onClicked: root.send([modelData.action])
-                  onHovered: function(h) {
-                    if (h) {
-                      root.cursorActive = true
-                      root.playerIndex = root._playerSeekOffset + index
+                Repeater {
+                  model: [
+                    { glyph: root.glyphPrev, action: "prev", primary: false },
+                    { glyph: root.playing ? root.glyphPause : root.glyphPlay, action: "toggle", primary: true },
+                    { glyph: root.glyphNext, action: "next", primary: false }
+                  ]
+
+                  Button {
+                    required property var modelData
+                    required property int index
+                    iconText: modelData.glyph
+                    foreground: modelData.primary ? root.foreground : root.dim
+                    fontFamily: root.fontFamily
+                    iconSize: Style.font.icon
+                    hasCursor: root.cursorActive
+                      && root.playerIndex === root._playerSeekOffset + index
+                    onClicked: root.send([modelData.action])
+                    onHovered: function(h) {
+                      if (h) {
+                        root.cursorActive = true
+                        root.playerIndex = root._playerSeekOffset + index
+                      }
                     }
                   }
                 }
               }
-            }
-
-            // Wrapped in the same cursor chrome the display widget's
-            // brightness slider uses, so j/k reaching this row and h/l
-            // seeking it look like the rest of the kit rather than a mouse
-            // afterthought. Keyboard and mouse focus share this one
-            // highlight, per CursorSurface's contract.
-            CursorSurface {
-              id: seekSurface
-              anchors.left: parent.left
-              anchors.right: transport.left
-              anchors.rightMargin: Style.space(14)
-              anchors.top: parent.top
-              visible: root.track !== null
-              height: seekSlider.implicitHeight + Style.spacing.controlGap
-              hasCursor: root.cursorActive && root.playerIndex === 0 && root.track !== null
-              foreground: root.foreground
-              outline: true
-
-              PanelSlider {
-                id: seekSlider
-                bar: root.bar
-                anchors.fill: parent
-                anchors.leftMargin: Style.space(6)
-                anchors.rightMargin: Style.space(6)
-                minimum: 0
-                maximum: Math.max(1, root.playback.duration || 1)
-                step: 1
-                integer: true
-                value: root.playback.elapsed || 0
-                onReleased: function(position) { root.send(["seek", String(Math.round(position))]) }
-              }
-
-              HoverHandler {
-                onHoveredChanged: if (hovered) {
-                  root.cursorActive = true
-                  root.playerIndex = 0
-                }
-              }
-            }
-
-            Text {
-              id: elapsedLabel
-              visible: seekSurface.visible
-              anchors.left: parent.left
-              anchors.top: seekSurface.bottom
-              anchors.topMargin: Style.space(2)
-              text: root.playback.elapsedText || "0:00"
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-            }
-
-            Text {
-              visible: seekSurface.visible
-              anchors.right: seekSurface.right
-              anchors.top: seekSurface.bottom
-              anchors.topMargin: Style.space(2)
-              text: root.playback.durationText || "0:00"
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
             }
           }
 
