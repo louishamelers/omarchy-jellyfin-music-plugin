@@ -31,6 +31,9 @@ Panel {
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
   readonly property string glyphMusic: String.fromCodePoint(0xF075A)
+  // The bar icon: a jellyfish rather than a plain note, since this is
+  // specifically Jellyfin's music and not just "some music is playing".
+  readonly property string glyphJellyfish: String.fromCodePoint(0xF0F01)
   readonly property string glyphPlay: String.fromCodePoint(0xF040A)
   readonly property string glyphPause: String.fromCodePoint(0xF03E4)
   readonly property string glyphNext: String.fromCodePoint(0xF04AD)
@@ -840,7 +843,7 @@ Panel {
       Text {
         id: barGlyph
         anchors.verticalCenter: parent.verticalCenter
-        text: root.glyphMusic
+        text: root.glyphJellyfish
         color: button.foreground
         font.family: root.fontFamily
         font.pixelSize: Style.font.icon
