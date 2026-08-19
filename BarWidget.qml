@@ -1357,8 +1357,17 @@ Panel {
             required property int index
             width: ListView.view.width
             implicitHeight: Style.spacing.controlHeight
-            readonly property bool isCurrent: modelData.kind === "queued"
+            // The queue marks the playing position rather than an id -- a
+            // duplicate of the same track elsewhere in the queue must not
+            // light up too.
+            readonly property bool isQueuedCurrent: modelData.kind === "queued"
               && modelData.glyph !== ""
+            // A plain track row -- an album, a playlist, search, favorites --
+            // has no queue position of its own, so it matches the playing
+            // track by id instead.
+            readonly property bool isCurrentTrack: modelData.kind === "track"
+              && root.track !== null && modelData.key === root.track.id
+            readonly property bool isCurrent: isQueuedCurrent || isCurrentTrack
             readonly property bool opens: root.isOpenable(modelData)
             // Whether a row is a song, not a folder -- the only rows the
             // favorite heart applies to.
@@ -1373,8 +1382,10 @@ Panel {
             hasCursor: root.rowCursorVisible && root.rowIndex === index
             // The currently-queued track keeps its highlight even once the
             // cursor has moved off it, the way wifi keeps the connected
-            // network lit.
-            current: isCurrent
+            // network lit. A plain track row marks the same thing with bold
+            // text instead, below -- a filled pill reads as "selected",
+            // which a track sitting in an album you are just browsing is not.
+            current: isQueuedCurrent
 
             Text {
               id: rowGlyph
@@ -1416,6 +1427,9 @@ Panel {
                 : (modelData.kind === "queued" && !isCurrent ? root.dim : root.foreground)
               font.family: root.fontFamily
               font.pixelSize: Style.font.body
+              // The mark for a plain track row -- the queue already has its
+              // own pill for this, so bold would be pure noise piled on top.
+              font.bold: isCurrentTrack
               // A trail too long for the panel loses its head rather than
               // its tail: where you are is the part worth keeping.
               elide: modelData.kind === "back" ? Text.ElideLeft : Text.ElideRight
