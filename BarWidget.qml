@@ -1062,10 +1062,10 @@ Panel {
               }
             }
 
-            // Transport, flush with the art's left edge -- its own row below
-            // both the art and the text column, not tucked under just one of
-            // them. prev, play/pause, next, all borderless and one size,
-            // play/pause simply brighter as the primary action.
+            // Transport, its own row spanning the full width below both the
+            // art and the text column, centered in it -- prev, play/pause,
+            // next, all borderless and one size, play/pause simply brighter
+            // as the primary action.
             Item {
               id: transportBlock
               anchors.left: parent.left
@@ -1077,7 +1077,7 @@ Panel {
 
               Row {
                 id: transport
-                anchors.left: parent.left
+                anchors.horizontalCenter: parent.horizontalCenter
                 spacing: Style.space(6)
 
                 Repeater {
