@@ -335,6 +335,7 @@ def search_entry(item):
         "id": track["id"],
         "name": track["title"],
         "detail": track["artist"],
+        "album": track["album"],
         "favorite": track["favorite"],
     }
 
@@ -369,17 +370,16 @@ def album_entry(item, implied_artist=False):
 def track_entries(tracks):
     """Listing rows for a run of already-flattened tracks.
 
-    The artist column goes away when every track carries the same one: down an
-    album by a single artist it is that album's own credit repeated twelve
-    times, which is noise rather than information. A compilation, or a playlist
-    that wanders, keeps it.
+    Artist and album ride along on every row now that the panel draws them as
+    a muted line under the title rather than folding them into it -- there is
+    no longer a single crowded line for a repeated credit to clutter.
     """
-    show_artist = len({track["artist"] for track in tracks}) > 1
     return [
         {
             "id": track["id"],
             "name": track["title"],
-            "detail": track["artist"] if show_artist else "",
+            "detail": track["artist"],
+            "album": track.get("album", ""),
             "favorite": track.get("favorite", False),
         }
         for track in tracks

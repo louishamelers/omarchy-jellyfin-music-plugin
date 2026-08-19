@@ -192,6 +192,7 @@ Panel {
         key: entry.id,
         label: entry.name,
         detail: entry.detail || "",
+        album: entry.album || "",
         glyph: root.kindGlyph(entry.type),
         favorite: entry.favorite === true
       }
@@ -214,6 +215,7 @@ Panel {
       // and still arrive as raw tracks.
       var label = row.name !== undefined ? row.name : (row.title || "")
       var detail = row.detail !== undefined ? row.detail : (row.artist || "")
+      var album = row.album || ""
       if (filter !== "" && (label + " " + detail).toLowerCase().indexOf(filter) < 0)
         continue
       matched.push({
@@ -223,6 +225,7 @@ Panel {
         key: kind === "queued" ? String(i) : row.id,
         label: label,
         detail: detail,
+        album: album,
         source: source,
         glyph: kind === "queued"
           ? (i === queueIndex ? glyphPlay : "")
@@ -1359,7 +1362,9 @@ Panel {
             required property var modelData
             required property int index
             width: ListView.view.width
-            implicitHeight: Style.spacing.controlHeight
+            // A song's two-line title needs more room than the single-line
+            // control height everything else still fits inside.
+            implicitHeight: Math.max(Style.spacing.controlHeight, textStack.implicitHeight + Style.space(8))
             // The queue marks the playing position rather than an id -- a
             // duplicate of the same track elsewhere in the queue must not
             // light up too.
@@ -1405,37 +1410,61 @@ Panel {
               font.pixelSize: modelData.kind === "queued" ? Style.font.caption : Style.font.body
             }
 
-            Text {
+            // A song gets its own title line plus a muted "artist - album"
+            // line beneath; anything else (a folder, the trail back, a
+            // note) stays the single "label · detail" line this always was.
+            Column {
+              id: textStack
               anchors.left: rowGlyph.visible ? rowGlyph.right : parent.left
               anchors.leftMargin: rowGlyph.visible ? Style.space(8) : Style.spacing.md
               anchors.right: chevron.visible ? chevron.left : (favoriteMark.visible ? favoriteMark.left : parent.right)
               anchors.rightMargin: chevron.visible || favoriteMark.visible ? Style.space(6) : Style.spacing.md
               anchors.verticalCenter: parent.verticalCenter
-              // Deliberately a block, not the one-line ternary this was.
-              // As an optimised single-expression binding it gets
-              // evaluated once before the delegate has injected
-              // modelData, resolves to undefined, and logs "Unable to
-              // assign [undefined] to QString" -- once per row per
-              // rebuild, and the model rebuilds on every status poll. The
-              // row rendered fine either way; the journal did not.
-              text: {
-                var label = modelData && modelData.label !== undefined ? modelData.label : ""
-                var detail = modelData ? modelData.detail : ""
-                return detail ? label + "  ·  " + detail : label
+              spacing: Style.spacing.xxs
+
+              Text {
+                width: parent.width
+                // Deliberately a block, not the one-line ternary this was.
+                // As an optimised single-expression binding it gets
+                // evaluated once before the delegate has injected
+                // modelData, resolves to undefined, and logs "Unable to
+                // assign [undefined] to QString" -- once per row per
+                // rebuild, and the model rebuilds on every status poll. The
+                // row rendered fine either way; the journal did not.
+                text: {
+                  var label = modelData && modelData.label !== undefined ? modelData.label : ""
+                  if (navRow.isSong) return label
+                  var detail = modelData ? modelData.detail : ""
+                  return detail ? label + "  ·  " + detail : label
+                }
+                // In the queue only the track playing carries full weight;
+                // the rest is context you scan past -- as is the trail back,
+                // which says where you are rather than offering anything.
+                color: modelData.kind === "note" || modelData.kind === "back" ? root.dim
+                  : (modelData.kind === "queued" && !isCurrent ? root.dim : root.foreground)
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+                // The mark for a plain track row -- the queue already has its
+                // own pill for this, so bold would be pure noise piled on top.
+                font.bold: isCurrentTrack
+                // A trail too long for the panel loses its head rather than
+                // its tail: where you are is the part worth keeping.
+                elide: modelData.kind === "back" ? Text.ElideLeft : Text.ElideRight
               }
-              // In the queue only the track playing carries full weight;
-              // the rest is context you scan past -- as is the trail back,
-              // which says where you are rather than offering anything.
-              color: modelData.kind === "note" || modelData.kind === "back" ? root.dim
-                : (modelData.kind === "queued" && !isCurrent ? root.dim : root.foreground)
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.body
-              // The mark for a plain track row -- the queue already has its
-              // own pill for this, so bold would be pure noise piled on top.
-              font.bold: isCurrentTrack
-              // A trail too long for the panel loses its head rather than
-              // its tail: where you are is the part worth keeping.
-              elide: modelData.kind === "back" ? Text.ElideLeft : Text.ElideRight
+
+              Text {
+                width: parent.width
+                visible: navRow.isSong && text !== ""
+                text: {
+                  var artist = modelData ? (modelData.detail || "") : ""
+                  var album = modelData ? (modelData.album || "") : ""
+                  return artist && album ? artist + "  -  " + album : (artist || album)
+                }
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                elide: Text.ElideRight
+              }
             }
 
             // Whether a song is favorited, read-only here -- the transport

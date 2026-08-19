@@ -261,11 +261,18 @@ class SearchEntryTest(unittest.TestCase):
 
     def test_track(self):
         entry = jf.search_entry(
-            {"Type": "Audio", "Id": "c3", "Name": "So What", "Artists": ["Miles Davis"]}
+            {"Type": "Audio", "Id": "c3", "Name": "So What", "Artists": ["Miles Davis"], "Album": "Kind of Blue"}
         )
         self.assertEqual(
             entry,
-            {"type": "track", "id": "c3", "name": "So What", "detail": "Miles Davis", "favorite": False},
+            {
+                "type": "track",
+                "id": "c3",
+                "name": "So What",
+                "detail": "Miles Davis",
+                "album": "Kind of Blue",
+                "favorite": False,
+            },
         )
 
     def test_untyped_items_are_treated_as_tracks(self):
@@ -322,14 +329,16 @@ class AlbumEntryTest(unittest.TestCase):
 
 
 class TrackEntriesTest(unittest.TestCase):
-    def test_drops_an_artist_column_that_repeats(self):
+    def test_carries_the_artist_even_when_it_repeats(self):
+        # A muted line under the title, not a crowded shared line -- a
+        # repeated credit is no longer noise the way it was inline.
         rows = jf.track_entries(
             [
                 {"id": "1", "title": "Stengah", "artist": "Meshuggah"},
                 {"id": "2", "title": "Rational Gaze", "artist": "Meshuggah"},
             ]
         )
-        self.assertEqual([row["detail"] for row in rows], ["", ""])
+        self.assertEqual([row["detail"] for row in rows], ["Meshuggah", "Meshuggah"])
         self.assertEqual([row["name"] for row in rows], ["Stengah", "Rational Gaze"])
 
     def test_keeps_it_when_the_listing_wanders(self):
@@ -340,6 +349,14 @@ class TrackEntriesTest(unittest.TestCase):
             ]
         )
         self.assertEqual([row["detail"] for row in rows], ["Miles Davis", "Meshuggah"])
+
+    def test_carries_the_album(self):
+        rows = jf.track_entries([{"id": "1", "title": "So What", "artist": "Miles Davis", "album": "Kind of Blue"}])
+        self.assertEqual(rows[0]["album"], "Kind of Blue")
+
+    def test_tolerates_a_missing_album(self):
+        rows = jf.track_entries([{"id": "1", "title": "So What", "artist": "Miles Davis"}])
+        self.assertEqual(rows[0]["album"], "")
 
     def test_empty_listing(self):
         self.assertEqual(jf.track_entries([]), [])
