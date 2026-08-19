@@ -922,6 +922,10 @@ Panel {
         else if (t === "n") root.send(["next"])
         else if (t === "p") root.send(["prev"])
         else if (t === "s") root.send(["play", "--shuffle", "--limit", String(root.setting("shuffleLimit", 200))])
+        // "f" folds the card shut the same as clicking the expand/collapse
+        // button itself -- a shortcut for it rather than a move of the
+        // transport cursor onto it.
+        else if (t === "f") root.detailsExpanded = !root.detailsExpanded
         // "/" for search, the way a pager or a browser does it. Also
         // claims the row cursor from wherever it was (a player stop
         // included) so the field visibly lights up once focus lands.

@@ -183,7 +183,7 @@ that is in between.
 
 In the popup, `j`/`k` move, `l`/`→` opens a row, `h`/`←` goes back, `Enter`
 plays or opens, `space` toggles playback, `n` and `p` skip, `s`
-shuffles the library, and `/` searches.
+shuffles the library, `f` folds the card shut or open, and `/` searches.
 
 `j`/`k` out of the top of the list also reach the transport controls —
 favorite, prev, play/pause, next, and the seek bar above them — the same way
