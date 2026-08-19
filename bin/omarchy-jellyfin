@@ -300,6 +300,7 @@ def track_from_item(item):
         "artId": item.get("AlbumId") or item.get("Id", ""),
         # Jellyfin counts in 100ns ticks; everything downstream wants seconds.
         "duration": int(ticks / 10_000_000) if ticks else 0,
+        "favorite": bool((item.get("UserData") or {}).get("IsFavorite")),
     }
 
 
@@ -334,6 +335,7 @@ def search_entry(item):
         "id": track["id"],
         "name": track["title"],
         "detail": track["artist"],
+        "favorite": track["favorite"],
     }
 
 
@@ -378,6 +380,7 @@ def track_entries(tracks):
             "id": track["id"],
             "name": track["title"],
             "detail": track["artist"] if show_artist else "",
+            "favorite": track.get("favorite", False),
         }
         for track in tracks
     ]
@@ -685,7 +688,11 @@ def api_post(config, path, payload, unauthorized=None):
     return _api_request(config, config["server"] + path, payload, unauthorized)
 
 
-def _api_request(config, url, payload, unauthorized=None):
+def api_delete(config, path, unauthorized=None):
+    return _api_request(config, config["server"] + path, None, unauthorized, method="DELETE")
+
+
+def _api_request(config, url, payload, unauthorized=None, method=None):
     data = None
     headers = {
         "Authorization": auth_header(config.get("token"), config["deviceId"]),
@@ -695,7 +702,7 @@ def _api_request(config, url, payload, unauthorized=None):
         data = json.dumps(payload).encode("utf-8")
         headers["Content-Type"] = "application/json"
 
-    request = urllib.request.Request(url, data=data, headers=headers)
+    request = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
         context = ssl_context(config.get("insecure", False))
         with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT, context=context) as response:
@@ -730,7 +737,7 @@ def fetch_tracks(config, params):
     base = {
         "IncludeItemTypes": "Audio",
         "Recursive": "true",
-        "Fields": "Artists,Album,RunTimeTicks",
+        "Fields": "Artists,Album,RunTimeTicks,UserData",
         "userId": config["userId"],
         "Limit": QUEUE_LIMIT,
     }
@@ -752,7 +759,7 @@ def playlist_tracks(config, playlist_id):
     result = api_get(
         config,
         "/Playlists/%s/Items" % urllib.parse.quote(str(playlist_id), safe=""),
-        {"userId": config["userId"], "Fields": "Artists,Album,RunTimeTicks"},
+        {"userId": config["userId"], "Fields": "Artists,Album,RunTimeTicks,UserData"},
     )
     return [track_from_item(item) for item in items_of(result)]
 
@@ -773,7 +780,7 @@ def search_library(config, query, limits=SEARCH_LIMITS):
                 "SearchTerm": query,
                 "IncludeItemTypes": item_type,
                 "Recursive": "true",
-                "Fields": "Artists,Album,RunTimeTicks",
+                "Fields": "Artists,Album,RunTimeTicks,UserData",
                 "userId": config["userId"],
                 "SortBy": "SortName",
                 "Limit": limit,
@@ -1256,6 +1263,56 @@ def cmd_favorites(args):
         print("%s - %s" % (track["artist"] or "Unknown artist", track["title"]))
 
 
+def cmd_favorite(args):
+    config = load_config()
+    item_id = args.item
+
+    if args.on:
+        target = True
+    elif args.off:
+        target = False
+    else:
+        # No explicit direction: ask the server what the track is now and flip
+        # it. The bar widget always knows the current state already -- it just
+        # showed you the heart -- so it passes --on/--off and this branch is
+        # really only here for the CLI used bare from a terminal.
+        item = api_get(
+            config,
+            "/Users/%s/Items/%s"
+            % (
+                urllib.parse.quote(str(config["userId"]), safe=""),
+                urllib.parse.quote(str(item_id), safe=""),
+            ),
+        )
+        target = not bool(((item or {}).get("UserData") or {}).get("IsFavorite"))
+
+    path = "/Users/%s/FavoriteItems/%s" % (
+        urllib.parse.quote(str(config["userId"]), safe=""),
+        urllib.parse.quote(str(item_id), safe=""),
+    )
+    if target:
+        api_post(config, path, {})
+    else:
+        api_delete(config, path)
+
+    # The queue file is the only other place a track's favorite state is
+    # cached -- keep it in step so the now-playing heart is right on the very
+    # next status poll, without waiting on a fresh /Items round trip.
+    queue = read_queue()
+    changed = False
+    for track in queue:
+        if track.get("id") == item_id:
+            track["favorite"] = target
+            changed = True
+    if changed:
+        write_queue(queue)
+
+    if args.json:
+        print(json.dumps({"id": item_id, "favorite": target}))
+    else:
+        print("Favorited." if target else "Unfavorited.")
+
+
 def cmd_search(args):
     config = load_config()
     query = (args.query or "").strip()
@@ -1472,6 +1529,14 @@ def build_parser():
     favorites = sub.add_parser("favorites", help="list favorite tracks")
     favorites.add_argument("--json", action="store_true")
     favorites.set_defaults(func=cmd_favorites)
+
+    favorite = sub.add_parser("favorite", help="mark or unmark a track as a favorite")
+    favorite.add_argument("item", help="track id")
+    favorite_direction = favorite.add_mutually_exclusive_group()
+    favorite_direction.add_argument("--on", action="store_true", help="mark as favorite")
+    favorite_direction.add_argument("--off", action="store_true", help="remove from favorites")
+    favorite.add_argument("--json", action="store_true")
+    favorite.set_defaults(func=cmd_favorite)
 
     artists = sub.add_parser("artists", help="list every artist in the library")
     artists.add_argument("--limit", type=int, default=BROWSE_LIMIT)

@@ -186,13 +186,14 @@ plays or opens, `space` toggles playback, `n` and `p` skip, `s`
 shuffles the library, and `/` searches.
 
 `j`/`k` out of the top of the list also reach the transport controls —
-prev, play/pause, next, and the seek bar above them — the same way `j`/`k`
-reach the display widget's sliders and presets. `Enter` plays, pauses,
-skips, or seeks depending which one has the cursor; `h`/`l` step between
-prev/play/next while the cursor is on one of them, or scrub 5 seconds while
-it is on the seek bar, the same split the display widget makes between its
-scale presets and its brightness slider. With something playing, that is
-where the cursor starts.
+favorite, prev, play/pause, next, and the seek bar above them — the same way
+`j`/`k` reach the display widget's sliders and presets. `Enter` plays,
+pauses, skips, favorites, or seeks depending which one has the cursor; `h`/`l`
+step between favorite/prev/play/next while the cursor is on one of them, or
+scrub 5 seconds while it is on the seek bar, the same split the display
+widget makes between its scale presets and its brightness slider. With
+something playing, that is where the cursor starts. Songs you have favorited
+show a heart next to them wherever they are listed.
 
 There is no settings screen: album art is always shown, the bar stays
 icon-only, and everything else is a sensible default. The one knob left — how
@@ -223,6 +224,8 @@ over SSH.
 ```bash
 omarchy-jellyfin play --shuffle          # shuffle the library
 omarchy-jellyfin play --favorites        # queue your favourites
+omarchy-jellyfin favorite <id> --on      # favorite a track
+omarchy-jellyfin favorite <id> --off     # unfavorite one
 omarchy-jellyfin playlists               # list playlists with their ids
 omarchy-jellyfin play --playlist <id>    # queue one
 omarchy-jellyfin search "kind of blue"   # artists, albums and tracks, with ids
@@ -247,10 +250,11 @@ omarchy-jellyfin toggle | next | prev | stop
 <img src="docs/images/cli.png" width="720"
      alt="A terminal running omarchy-jellyfin status, queue, search and albums: the playing track marked in the queue, and the listing commands printing an id, a name and a detail per row.">
 
-Add `--json` to `status`, `volume`, `queue`, `playlists`, `favorites`, `search`,
-`artists`, `albums`, and `tracks` for machine output. The listing commands share
-one row shape — `{id, name, detail}` — because what they list differs but what
-you do with it next does not.
+Add `--json` to `status`, `volume`, `queue`, `playlists`, `favorites`, `favorite`,
+`search`, `artists`, `albums`, and `tracks` for machine output. The listing
+commands share one row shape — `{id, name, detail}`, with `favorite` added for
+rows that are actual tracks — because what they list differs but what you do
+with it next does not.
 
 `artists` and `albums` stop at 2000 entries and say so on stderr; a library
 larger than that is one you search rather than scroll.

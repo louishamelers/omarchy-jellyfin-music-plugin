@@ -37,6 +37,7 @@ Panel {
   readonly property string glyphPrev: String.fromCodePoint(0xF04AE)
   readonly property string glyphShuffle: String.fromCodePoint(0xF049D)
   readonly property string glyphHeart: String.fromCodePoint(0xF02D1)
+  readonly property string glyphHeartOutline: String.fromCodePoint(0xF02D5)
   readonly property string glyphPlaylist: String.fromCodePoint(0xF0CB9)
   // Chevrons point the way through the library rather than folding a section
   // open in place: right goes a level in, left comes back out.
@@ -110,6 +111,7 @@ Panel {
   onTrackChanged: if (playerIndex >= playerStopCount) playerIndex = playerStopCount - 1
   readonly property bool playing: playback ? playback.playing === true : false
   readonly property bool paused: playback ? playback.paused === true : false
+  readonly property bool favorite: track && track.favorite === true
   readonly property bool loggedIn: account && account.configured === true
   // Always on: cover art is worth the space, and there is no settings screen
   // left to turn it off from.
@@ -187,7 +189,8 @@ Panel {
         key: entry.id,
         label: entry.name,
         detail: entry.detail || "",
-        glyph: root.kindGlyph(entry.type)
+        glyph: root.kindGlyph(entry.type),
+        favorite: entry.favorite === true
       }
     })
   }
@@ -220,7 +223,8 @@ Panel {
         source: source,
         glyph: kind === "queued"
           ? (i === queueIndex ? glyphPlay : "")
-          : root.kindGlyph(kind)
+          : root.kindGlyph(kind),
+        favorite: row.favorite === true
       })
     }
     if (matched.length <= browseRowCap) return matched
@@ -325,20 +329,20 @@ Panel {
 
   // The player controls, from the cursor's perspective, are a short vertical
   // stack of just two stops -- the seek bar (only with something to seek),
-  // then the transport row -- even though prev/play/next/expand are four
-  // separate buttons on screen. j/k only ever walk this vertical stack; -1
-  // means the cursor is down in the row list instead, 0.._playerStopCount-1
+  // then the transport row -- even though favorite/prev/play/next/expand are
+  // five separate buttons on screen. j/k only ever walk this vertical stack;
+  // -1 means the cursor is down in the row list instead, 0.._playerStopCount-1
   // indexes the stack.
   property int playerIndex: -1
   readonly property int _playerSeekOffset: track !== null ? 1 : 0
   readonly property int playerStopCount: _playerSeekOffset + 1
 
-  // Horizontal position within the transport stop: prev, play/pause, next,
-  // expand, left to right as they sit on screen. h/l walk this instead of
-  // j/k once the cursor is parked on the transport stop -- reached from
-  // play/pause outward, not as separate stops of their own on the vertical
-  // axis.
-  property int transportIndex: 1
+  // Horizontal position within the transport stop: favorite, prev,
+  // play/pause, next, expand, left to right as they sit on screen. h/l walk
+  // this instead of j/k once the cursor is parked on the transport stop --
+  // reached from play/pause outward, not as separate stops of their own on
+  // the vertical axis.
+  property int transportIndex: 2
 
   // Whether rowIndex (a row, or -1 for the search field) is the thing the
   // highlight should be following right now. Rows and the search field
@@ -357,9 +361,11 @@ Panel {
   }
 
   // The CLI verb a transport position performs -- which doubles as its
-  // identity, since "details" is not itself a command argument.
+  // identity, since "favorite" and "details" are not themselves plain command
+  // arguments (favorite needs the current track's id and a direction, and
+  // details never leaves the panel at all).
   function transportKind() {
-    return ["prev", "toggle", "next", "details"][transportIndex]
+    return ["favorite", "prev", "toggle", "next", "details"][transportIndex]
   }
 
   // j/k out of the top of the list reaches the search field, then the
@@ -380,14 +386,14 @@ Panel {
       if (next >= playerStopCount) { playerIndex = -1; rowIndex = -1; return }
       playerIndex = next
       // Landing on the transport stop always re-centers on play/pause --
-      // prev/next/expand are reached with h/l from there, not by walking
-      // further with j/k.
-      if (playerStopKind(playerIndex) === "transport") transportIndex = 1
+      // favorite/prev/next/expand are reached with h/l from there, not by
+      // walking further with j/k.
+      if (playerStopKind(playerIndex) === "transport") transportIndex = 2
       return
     }
     if (rowIndex < 0) {
       if (step > 0) rowIndex = 0
-      else if (path.length === 0) { playerIndex = playerStopCount - 1; transportIndex = 1 }
+      else if (path.length === 0) { playerIndex = playerStopCount - 1; transportIndex = 2 }
       return
     }
     if (step < 0 && rowIndex === 0 && path.length === 0) {
@@ -411,15 +417,25 @@ Panel {
     send(["seek", String(Math.round(next))])
   }
 
+  // The heart already knows which way it is pointing -- the widget just
+  // showed it -- so the direction goes over explicitly rather than asking the
+  // CLI to fetch the current state and flip it, which would cost an extra
+  // round trip on every press.
+  function toggleFavorite() {
+    if (!track) return
+    send(["favorite", track.id, favorite ? "--off" : "--on"])
+  }
+
   // h/l on the seek stop scrubs, same as h/l on the display widget's
-  // brightness slider; on the transport stop they walk prev/play/next/expand
-  // instead, the same as h/l on that widget's scale-preset row -- and stay
-  // inside the transport rather than spilling into the seek bar or the
-  // list, so the two meanings of the key never fight over one press.
+  // brightness slider; on the transport stop they walk
+  // favorite/prev/play/next/expand instead, the same as h/l on that widget's
+  // scale-preset row -- and stay inside the transport rather than spilling
+  // into the seek bar or the list, so the two meanings of the key never
+  // fight over one press.
   function movePlayerCursorH(step) {
     if (playerStopKind(playerIndex) === "seek") { seekBy(step * seekStepSeconds); return }
     var next = transportIndex + step
-    if (next < 0 || next > 3) return
+    if (next < 0 || next > 4) return
     transportIndex = next
   }
 
@@ -775,7 +791,7 @@ Panel {
       // Lands on the seek bar first, the way the display widget lands on its
       // brightness slider -- not several sections down in the library.
       playerIndex = track !== null ? 0 : -1
-      transportIndex = 1
+      transportIndex = 2
       detailsExpanded = false
       refresh()
       refreshAccount()
@@ -878,6 +894,7 @@ Panel {
           } else {
             var tKind = root.transportKind()
             if (tKind === "details") root.detailsExpanded = !root.detailsExpanded
+            else if (tKind === "favorite") root.toggleFavorite()
             else root.send([tKind])
           }
         } else if (root.rowIndex < 0) {
@@ -1121,17 +1138,44 @@ Panel {
           }
 
           // Transport, its own row spanning the full width below both the
-          // art and the text column, centered in it -- prev, play/pause,
-          // next, all borderless and one size, play/pause simply brighter
-          // as the primary action.
+          // art and the text column -- prev, play/pause, next, centered in
+          // it the way they always were; favorite and the details toggle
+          // flank them at the far left and far right, the same pairing the
+          // display widget's own edge buttons use. All borderless and one
+          // size, play/pause and a favorited track simply brighter as the
+          // foreground action.
           Item {
             id: transportBlock
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.top: artFrame.height > infoColumn.height ? artFrame.bottom : infoColumn.bottom
             anchors.topMargin: Style.space(seekBlock.visible ? 6 : 8)
-            implicitHeight: Math.max(transport.implicitHeight, detailsToggle.implicitHeight)
+            implicitHeight: Math.max(transport.implicitHeight, detailsToggle.implicitHeight, favoriteToggle.implicitHeight)
             height: implicitHeight
+
+            // Mirrors detailsToggle on the opposite edge: the one button on
+            // this row that acts on the track rather than on the queue, so
+            // it sits apart from prev/play/next rather than among them.
+            Button {
+              id: favoriteToggle
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
+              iconText: root.favorite ? root.glyphHeart : root.glyphHeartOutline
+              foreground: root.favorite ? root.foreground : root.dim
+              fontFamily: root.fontFamily
+              iconSize: Style.font.icon
+              hasCursor: root.cursorActive
+                && root.playerIndex === root._playerSeekOffset
+                && root.transportIndex === 0
+              onClicked: root.toggleFavorite()
+              onHovered: function(h) {
+                if (h) {
+                  root.cursorActive = true
+                  root.playerIndex = root._playerSeekOffset
+                  root.transportIndex = 0
+                }
+              }
+            }
 
             Row {
               id: transport
@@ -1153,17 +1197,17 @@ Panel {
                   foreground: modelData.primary ? root.foreground : root.dim
                   fontFamily: root.fontFamily
                   iconSize: Style.font.icon
-                  // The Repeater's own index already matches
-                  // transportIndex's prev/toggle/next ordering.
+                  // Offset by one: favorite sits outside this Repeater at
+                  // transportIndex 0, so prev/toggle/next start at 1.
                   hasCursor: root.cursorActive
                     && root.playerIndex === root._playerSeekOffset
-                    && root.transportIndex === index
+                    && root.transportIndex === index + 1
                   onClicked: root.send([modelData.action])
                   onHovered: function(h) {
                     if (h) {
                       root.cursorActive = true
                       root.playerIndex = root._playerSeekOffset
-                      root.transportIndex = index
+                      root.transportIndex = index + 1
                     }
                   }
                 }
@@ -1172,10 +1216,10 @@ Panel {
 
             // Folds away everything below the divider -- search and the
             // browse list -- so the panel can sit as a small now-playing
-            // card. Same button as prev/play/next, just off to the side
-            // rather than in the Row above so those stay centered on the
+            // card. Same button as favorite/prev/play/next, just off to the
+            // side rather than among them so those stay centered on the
             // card regardless -- and the far end of the same transport
-            // stop, so h/l walks onto it exactly like prev/toggle/next.
+            // stop, so h/l walks onto it exactly like the rest.
             Button {
               id: detailsToggle
               anchors.right: parent.right
@@ -1186,13 +1230,13 @@ Panel {
               iconSize: Style.font.icon
               hasCursor: root.cursorActive
                 && root.playerIndex === root._playerSeekOffset
-                && root.transportIndex === 3
+                && root.transportIndex === 4
               onClicked: root.detailsExpanded = !root.detailsExpanded
               onHovered: function(h) {
                 if (h) {
                   root.cursorActive = true
                   root.playerIndex = root._playerSeekOffset
-                  root.transportIndex = 3
+                  root.transportIndex = 4
                 }
               }
             }
@@ -1313,6 +1357,9 @@ Panel {
             readonly property bool isCurrent: modelData.kind === "queued"
               && modelData.glyph !== ""
             readonly property bool opens: root.isOpenable(modelData)
+            // Whether a row is a song, not a folder -- the only rows the
+            // favorite heart applies to.
+            readonly property bool isSong: modelData.kind === "track" || modelData.kind === "queued"
 
             foreground: root.foreground
             // Per CursorSurface's contract, hasCursor is the only thing
@@ -1344,8 +1391,8 @@ Panel {
             Text {
               anchors.left: rowGlyph.visible ? rowGlyph.right : parent.left
               anchors.leftMargin: rowGlyph.visible ? Style.space(8) : Style.spacing.md
-              anchors.right: chevron.visible ? chevron.left : parent.right
-              anchors.rightMargin: chevron.visible ? Style.space(6) : Style.spacing.md
+              anchors.right: chevron.visible ? chevron.left : (favoriteMark.visible ? favoriteMark.left : parent.right)
+              anchors.rightMargin: chevron.visible || favoriteMark.visible ? Style.space(6) : Style.spacing.md
               anchors.verticalCenter: parent.verticalCenter
               // Deliberately a block, not the one-line ternary this was.
               // As an optimised single-expression binding it gets
@@ -1369,6 +1416,22 @@ Panel {
               // A trail too long for the panel loses its head rather than
               // its tail: where you are is the part worth keeping.
               elide: modelData.kind === "back" ? Text.ElideLeft : Text.ElideRight
+            }
+
+            // Whether a song is favorited, read-only here -- the transport
+            // row above is where that gets changed, not the list. Filled for
+            // one already favorited, outline otherwise, the same pairing the
+            // transport's own favorite button uses.
+            Text {
+              id: favoriteMark
+              anchors.right: parent.right
+              anchors.rightMargin: Style.spacing.md
+              anchors.verticalCenter: parent.verticalCenter
+              visible: navRow.isSong
+              text: modelData.favorite === true ? root.glyphHeart : root.glyphHeartOutline
+              color: modelData.favorite === true ? root.foreground : root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
             }
 
             Text {

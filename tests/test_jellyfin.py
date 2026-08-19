@@ -211,8 +211,20 @@ class TrackFromItemTest(unittest.TestCase):
         track = jf.track_from_item({})
         self.assertEqual(
             track,
-            {"id": "", "title": "Unknown", "artist": "", "album": "", "artId": "", "duration": 0},
+            {
+                "id": "",
+                "title": "Unknown",
+                "artist": "",
+                "album": "",
+                "artId": "",
+                "duration": 0,
+                "favorite": False,
+            },
         )
+
+    def test_reads_favorite_from_user_data(self):
+        track = jf.track_from_item({"Id": "1", "Name": "x", "UserData": {"IsFavorite": True}})
+        self.assertTrue(track["favorite"])
 
     def test_art_comes_from_the_album(self):
         track = jf.track_from_item({"Id": "track1", "Name": "x", "AlbumId": "album9"})
@@ -234,6 +246,12 @@ class SearchEntryTest(unittest.TestCase):
         )
         self.assertEqual(entry, {"type": "album", "id": "b2", "name": "Kind of Blue", "detail": "Miles Davis"})
 
+    def test_track_carries_its_favorite_state(self):
+        entry = jf.search_entry(
+            {"Type": "Audio", "Id": "c3", "Name": "So What", "UserData": {"IsFavorite": True}}
+        )
+        self.assertTrue(entry["favorite"])
+
     def test_album_falls_back_to_the_track_artists(self):
         # A compilation carries no album artist, only per-track credits.
         entry = jf.search_entry(
@@ -245,7 +263,10 @@ class SearchEntryTest(unittest.TestCase):
         entry = jf.search_entry(
             {"Type": "Audio", "Id": "c3", "Name": "So What", "Artists": ["Miles Davis"]}
         )
-        self.assertEqual(entry, {"type": "track", "id": "c3", "name": "So What", "detail": "Miles Davis"})
+        self.assertEqual(
+            entry,
+            {"type": "track", "id": "c3", "name": "So What", "detail": "Miles Davis", "favorite": False},
+        )
 
     def test_untyped_items_are_treated_as_tracks(self):
         # /Items always sets Type, but a listing asked for Audio only cannot be
