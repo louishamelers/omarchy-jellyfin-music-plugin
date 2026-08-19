@@ -392,8 +392,11 @@ Panel {
       return
     }
     if (rowIndex < 0) {
+      // Out the top of the search field and into the player stack -- from
+      // wherever the box was reached, the root's own search or a level's
+      // filter alike, so a submenu is never a dead end for k.
       if (step > 0) rowIndex = 0
-      else if (path.length === 0) { playerIndex = playerStopCount - 1; transportIndex = 2 }
+      else { playerIndex = playerStopCount - 1; transportIndex = 2 }
       return
     }
     if (step < 0 && rowIndex === 0 && path.length === 0) {
